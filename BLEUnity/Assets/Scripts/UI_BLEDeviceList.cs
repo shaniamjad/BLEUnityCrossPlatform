@@ -21,7 +21,17 @@ public class UI_BLEDeviceList : MonoBehaviour
 
         foreach (var dev in devices)
         {
-            
+            if (dev.type == DeviceType.Unknown)
+            {
+                if (deviceItems.TryGetValue(dev.id, out var existingItem))
+                {
+                    Destroy(existingItem.gameObject);
+                    deviceItems.Remove(dev.id);
+                }
+
+                continue;
+            }
+
             if (!deviceItems.ContainsKey(dev.id))
             {
                 var item = Instantiate(deviceItemPrefab, contentRoot);
