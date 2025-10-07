@@ -23,7 +23,6 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
     [SerializeField] private Button startMeasurementButton;
     [SerializeField] private Button pauseMeasurementButton;
     [SerializeField] private Button stopMeasurementButton;
-    [SerializeField] private TMP_Text measurementStatusText;
 
     private BleDevice device;
 
@@ -31,9 +30,6 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
     private MovellaSignalParser movellaParser;
     private BiopotSignalParser biopotParser;
 
-    private string lastLine1 = string.Empty;
-    private string lastLine2 = string.Empty;
-    private string lastLine3 = string.Empty;
     private bool hasProfile;
 
     #region Unity Lifecycle
@@ -104,8 +100,6 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
         if (stopMeasurementButton != null)
             stopMeasurementButton.onClick.AddListener(OnStopMeasurementClicked);
 
-        ApplyMeasurementState(dev);
-
         BLEManager.Instance.AddListener(dev.id, this);
     }
 
@@ -131,63 +125,6 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
             return;
 
         BLEManager.Instance.StopMeasurement(device.id);
-    }
-
-    private void ApplyMeasurementState(BleDevice dev)
-    {
-        if (dev == null)
-            return;
-
-        MeasurementState state = dev.measurementState;
-        bool connected = dev.isConnected;
-
-        if (measurementStatusText != null)
-        {
-            string message;
-            if (!connected)
-            {
-                message = "<color=red>Disconnected</color>";
-                if (!string.IsNullOrEmpty(lastLine1) || !string.IsNullOrEmpty(lastLine2) || !string.IsNullOrEmpty(lastLine3))
-                {
-                    message += " — last sample saved";
-                }
-            }
-            else if (state == MeasurementState.Sampling)
-            {
-                message = "<color=green>Sampling...</color>";
-            }
-            else if (state == MeasurementState.Paused)
-            {
-                message = "<color=yellow>Paused</color>";
-            }
-            else if (dev.isReady)
-            {
-                message = "<color=#cccccc>Ready</color>";
-            }
-            else
-            {
-                message = "<color=#cccccc>Stopped</color>";
-            }
-
-            measurementStatusText.text = message;
-        }
-
-        if (startMeasurementButton != null)
-            startMeasurementButton.interactable = connected && state != MeasurementState.Sampling;
-        if (pauseMeasurementButton != null)
-            pauseMeasurementButton.interactable = connected && state == MeasurementState.Sampling;
-        if (stopMeasurementButton != null)
-            stopMeasurementButton.interactable = connected && (state == MeasurementState.Sampling || state == MeasurementState.Paused);
-    }
-
-    private void CacheLastValues()
-    {
-        if (line1Text != null)
-            lastLine1 = line1Text.text;
-        if (line2Text != null)
-            lastLine2 = line2Text.text;
-        if (line3Text != null)
-            lastLine3 = line3Text.text;
     }
 
     /// <summary>
@@ -222,7 +159,6 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
         disconnectButton.gameObject.SetActive(connected);
         connectButton.interactable = hasProfile && !dev.isAutoConnecting;
 
-        ApplyMeasurementState(dev);
     }
 
     #region IBLEDeviceListener Implementation
@@ -231,13 +167,10 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
     {
         Debug.Log($"[UI_BLEDeviceItem] {dev.name} connected");
         UpdateStatus(dev);
-        if (!string.IsNullOrEmpty(lastLine1))
-            line1Text.text = lastLine1;
-        else
-            line1Text.text = "Waiting for data...";
-
-        line2Text.text = string.IsNullOrEmpty(lastLine2) ? string.Empty : lastLine2;
-        line3Text.text = string.IsNullOrEmpty(lastLine3) ? string.Empty : lastLine3;
+        
+        line1Text.text = "Waiting for data...";
+        line2Text.text = string.Empty;
+        line3Text.text = string.Empty;
     }
 
     public void OnDisconnected(BleDevice dev)
@@ -252,13 +185,11 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
     public void OnReady(BleDevice dev)
     {
         device = dev;
-        ApplyMeasurementState(dev);
     }
 
     public void OnMeasurementStateChanged(BleDevice dev, MeasurementState state)
     {
         device = dev;
-        ApplyMeasurementState(dev);
     }
 
     public void OnData(BleDevice dev, byte[] rawData)
@@ -312,7 +243,6 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
                 break;
         }
 
-        CacheLastValues();
     }
 
     #endregion
