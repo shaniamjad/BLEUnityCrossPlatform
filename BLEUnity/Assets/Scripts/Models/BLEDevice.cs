@@ -17,7 +17,8 @@ public class BleEvent
     public string name;
     public string eventType;
     public string value;
-    public string deviceType; // still string (comes from Android JSON)
+    public string deviceType; // still string (comes from native JSON)
+    public int rssi;
 }
 
 
@@ -28,6 +29,7 @@ public class BleDevice
     public string name;
     public DeviceType type;
     public bool isConnected;
+    public int rssi;
 }
 
 

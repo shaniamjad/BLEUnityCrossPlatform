@@ -61,21 +61,44 @@ public class BLEManager : MonoBehaviour
             return;
         }
 
-        if (!devices.ContainsKey(ev.id) && !string.IsNullOrEmpty(ev.name))
+        if (!devices.ContainsKey(ev.id) && !string.IsNullOrEmpty(ev.id))
         {
+            DeviceType detectedType = BleDeviceProfiles.DetectDeviceType(ev.deviceType, ev.name);
             devices[ev.id] = new BleDevice
             {
                 id = ev.id,
                 name = ev.name,
-                type = ParseDeviceType(ev.deviceType),
-                isConnected = false
+                type = detectedType,
+                isConnected = false,
+                rssi = ev.rssi
             };
+        }
+
+        if (devices.TryGetValue(ev.id, out var existingDevice))
+        {
+            if (!string.IsNullOrEmpty(ev.name)) existingDevice.name = ev.name;
+            var detectedType = BleDeviceProfiles.DetectDeviceType(ev.deviceType, ev.name ?? existingDevice.name);
+            if (detectedType != DeviceType.Unknown)
+            {
+                existingDevice.type = detectedType;
+            }
+            if (ev.eventType == "scanResult")
+            {
+                existingDevice.rssi = ev.rssi;
+            }
         }
 
 
         switch (ev.eventType)
         {
             case "scanResult":
+                break;
+
+            case "ready":
+                if (devices.TryGetValue(ev.id, out var readyDevice))
+                {
+                    HandleDeviceReady(readyDevice);
+                }
                 break;
 
             case "connected":
@@ -138,18 +161,28 @@ public class BLEManager : MonoBehaviour
 
 
 
-    private static DeviceType ParseDeviceType(string typeString)
+    private void HandleDeviceReady(BleDevice device)
     {
-        if (string.IsNullOrEmpty(typeString))
-            return DeviceType.Unknown;
+        var profile = BleDeviceProfiles.TryGetProfile(device.type);
+        if (profile == null)
+            return;
 
-        typeString = typeString.ToLowerInvariant();
-        return typeString switch
+        if (profile.AutoStartMeasurement)
         {
-            "movella" => DeviceType.Movella,
-            "biopot" => DeviceType.BioPot,
-            _ => DeviceType.Unknown
-        };
+            StartCoroutine(AutoStartAfterDelay(device.id, profile));
+        }
+    }
+
+    private System.Collections.IEnumerator AutoStartAfterDelay(string deviceId, BleDeviceProfileDefinition profile)
+    {
+        float delaySeconds = (float)profile.AutoStartDelay.TotalSeconds;
+        if (delaySeconds > 0f)
+            yield return new WaitForSeconds(delaySeconds);
+
+        if (BLEPlugin.Instance != null && profile.StartCommand != null)
+        {
+            BLEPlugin.Instance.SendControl(deviceId, profile.StartCommand, "start");
+        }
     }
 
 
@@ -218,7 +251,14 @@ public class BLEManager : MonoBehaviour
     // ----------------------------------------------------------------------
     public void Connect(string deviceId, DeviceType type)
     {
-        BLEPlugin.Instance.Connect(deviceId, type.ToString().ToLowerInvariant());
+        var profile = BleDeviceProfiles.TryGetProfile(type);
+        if (profile == null)
+        {
+            Debug.LogWarning($"[BLEManager] No device profile registered for {type}. Unable to connect to {deviceId}.");
+            return;
+        }
+
+        BLEPlugin.Instance.Connect(deviceId, profile);
     }
 
     public void DisConnect(string deviceId) =>
@@ -226,4 +266,40 @@ public class BLEManager : MonoBehaviour
 
     public void StopScan() =>
         BLEPlugin.Instance.StopScan();
+
+    public void StartMeasurement(string deviceId)
+    {
+        if (!devices.TryGetValue(deviceId, out var device))
+            return;
+
+        var profile = BleDeviceProfiles.TryGetProfile(device.type);
+        if (profile?.StartCommand != null)
+        {
+            BLEPlugin.Instance.SendControl(deviceId, profile.StartCommand, "start");
+        }
+    }
+
+    public void StopMeasurement(string deviceId)
+    {
+        if (!devices.TryGetValue(deviceId, out var device))
+            return;
+
+        var profile = BleDeviceProfiles.TryGetProfile(device.type);
+        if (profile?.StopCommand != null)
+        {
+            BLEPlugin.Instance.SendControl(deviceId, profile.StopCommand, "stop");
+        }
+    }
+
+    public void PauseMeasurement(string deviceId)
+    {
+        if (!devices.TryGetValue(deviceId, out var device))
+            return;
+
+        var profile = BleDeviceProfiles.TryGetProfile(device.type);
+        if (profile?.PauseCommand != null)
+        {
+            BLEPlugin.Instance.SendControl(deviceId, profile.PauseCommand, "pause");
+        }
+    }
 }

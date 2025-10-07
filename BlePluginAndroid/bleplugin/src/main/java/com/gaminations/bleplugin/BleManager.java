@@ -9,11 +9,14 @@ import android.bluetooth.le.ScanResult;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.os.Build;
+import android.util.Base64;
 import android.util.Log;
 
 import androidx.core.app.ActivityCompat;
 
 import com.unity3d.player.UnityPlayer;
+
+import org.json.JSONException;
 
 import java.util.HashMap;
 import java.util.Locale;
@@ -93,33 +96,19 @@ public class BleManager {
             BluetoothDevice d = result.getDevice();
             String id = (d != null && d.getAddress() != null) ? d.getAddress() : "";
             String name = (d != null && d.getName() != null) ? d.getName() : "";
-            String deviceType = BleManager.getDeviceType(name);
             int rssi = result.getRssi();
 
             String json = String.format(Locale.US,
-                    "{\"eventType\":\"scanResult\",\"id\":\"%s\",\"name\":\"%s\",\"deviceType\":\"%s\",\"rssi\":%d}",
-                    id, name, deviceType, rssi);
+                    "{\"eventType\":\"scanResult\",\"id\":\"%s\",\"name\":\"%s\",\"deviceType\":\"\",\"rssi\":%d}",
+                    id, name, rssi);
             sendUnity(json);
         }
     };
 
     /**
-     * Very simple heuristic to classify devices from their advertisement name.
-     * You may alter this if you have different naming schemes.
+     * Create and connect a device using configuration supplied from Unity.
      */
-    private static String getDeviceType(String input) {
-        if (input == null) return "";
-        String lowerInput = input.toLowerCase();
-        if (lowerInput.contains("biopot")) return "BioPot";
-        if (lowerInput.contains("movella") || lowerInput.contains("dot")) return "Movella";
-        return "";
-    }
-
-    /**
-     * Create and connect a device of `deviceType` at `deviceAddress`.
-     * Unity should pass deviceType determined from scanResult or UI choice.
-     */
-    public static void connect(String deviceAddress, String deviceType) {
+    public static void connect(String deviceAddress, String profileJson) {
         if (devices.containsKey(deviceAddress)) {
             sendUnity("{\"eventType\":\"error\",\"message\":\"already connected\"}");
             return;
@@ -144,19 +133,20 @@ public class BleManager {
             return;
         }
 
-        BleDeviceBase bleDevice;
-        switch (deviceType) {
-            case "biopot":
-                bleDevice = new BioPotDevice(device, unityObjectName);
-                break;
-            case "movella":
-                bleDevice = new MovellaDevice(device, unityObjectName);
-                break;
-            default:
-                sendUnity("{\"eventType\":\"error\",\"message\":\"Unknown device type:" + deviceType +"\"}");
-                return;
+        DeviceConfig config;
+        try {
+            if (profileJson == null) {
+                throw new JSONException("profile missing");
+            }
+            config = DeviceConfig.fromJson(profileJson);
+        } catch (JSONException e) {
+            sendUnity(String.format(Locale.US,
+                    "{\"eventType\":\"error\",\"message\":\"invalid profile\",\"detail\":\"%s\"}",
+                    e.getMessage()));
+            return;
         }
 
+        BleDeviceBase bleDevice = new ConfigurableBleDevice(device, unityObjectName, config);
         devices.put(deviceAddress, bleDevice);
         bleDevice.connect(act);
     }
@@ -184,6 +174,39 @@ public class BleManager {
         }
         devices.clear();
         sendUnity("{\"eventType\":\"allDisconnected\"}");
+    }
+
+    public static void startMeasurement(String deviceAddress) {
+        BleDeviceBase device = devices.get(deviceAddress);
+        if (device instanceof ConfigurableBleDevice) {
+            ((ConfigurableBleDevice) device).startMeasurement();
+        }
+    }
+
+    public static void stopMeasurement(String deviceAddress) {
+        BleDeviceBase device = devices.get(deviceAddress);
+        if (device instanceof ConfigurableBleDevice) {
+            ((ConfigurableBleDevice) device).stopMeasurement();
+        }
+    }
+
+    public static void pauseMeasurement(String deviceAddress) {
+        BleDeviceBase device = devices.get(deviceAddress);
+        if (device instanceof ConfigurableBleDevice) {
+            ((ConfigurableBleDevice) device).pauseMeasurement();
+        }
+    }
+
+    public static void sendControl(String deviceAddress, String base64Payload, String action) {
+        BleDeviceBase device = devices.get(deviceAddress);
+        if (device instanceof ConfigurableBleDevice && base64Payload != null) {
+            try {
+                byte[] payload = Base64.decode(base64Payload, Base64.DEFAULT);
+                ((ConfigurableBleDevice) device).sendCustomControl(payload, action);
+            } catch (IllegalArgumentException ex) {
+                Log.e(TAG, "Invalid control payload", ex);
+            }
+        }
     }
 
     // ----------------- Helpers -----------------

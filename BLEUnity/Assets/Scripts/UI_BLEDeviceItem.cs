@@ -74,6 +74,9 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
             BLEManager.Instance.DisConnect(dev.id);
         });
 
+        bool hasProfile = BleDeviceProfiles.TryGetProfile(dev.type) != null;
+        connectButton.interactable = hasProfile;
+
         BLEManager.Instance.AddListener(dev.id, this);
     }
 
@@ -85,7 +88,10 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
         device = dev;
         bool connected = dev.isConnected;
 
-        statusText.text = connected ? "<color=green>Connected</color>" : "<color=red>Disconnected</color>";
+        string rssiText = dev.rssi != 0 ? $" (RSSI {dev.rssi})" : string.Empty;
+        statusText.text = connected
+            ? "<color=green>Connected</color>"
+            : $"<color=red>Disconnected</color>{rssiText}";
         connectButton.gameObject.SetActive(!connected);
         disconnectButton.gameObject.SetActive(connected);
 

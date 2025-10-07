@@ -86,12 +86,77 @@ public class BLEPlugin : MonoBehaviour
 #endif
     }
 
-    public void Connect(string deviceId, string deviceType)
+    public void Connect(string deviceId, BleDeviceProfileDefinition profile)
+    {
+        if (profile == null)
+        {
+            Debug.LogError($"[BLEPlugin] No profile provided for {deviceId}");
+            return;
+        }
+
+        string payload = profile.ToJsonPayload();
+
+#if UNITY_ANDROID && !UNITY_EDITOR
+        using(var jc = new AndroidJavaClass(ANDROID_CLASS))
+        {
+            jc.CallStatic("connect", deviceId, payload);
+        }
+#elif UNITY_IOS && !UNITY_EDITOR
+        _ble_connect(deviceId, payload);
+#endif
+    }
+
+    public void StartMeasurement(string deviceId)
     {
 #if UNITY_ANDROID && !UNITY_EDITOR
-        using(var jc = new AndroidJavaClass(ANDROID_CLASS)) jc.CallStatic("connect", deviceId, deviceType);
+        using(var jc = new AndroidJavaClass(ANDROID_CLASS))
+        {
+            jc.CallStatic("startMeasurement", deviceId);
+        }
 #elif UNITY_IOS && !UNITY_EDITOR
-        _ble_connect(deviceId);
+        _ble_startMeasurement(deviceId);
+#endif
+    }
+
+    public void StopMeasurement(string deviceId)
+    {
+#if UNITY_ANDROID && !UNITY_EDITOR
+        using(var jc = new AndroidJavaClass(ANDROID_CLASS))
+        {
+            jc.CallStatic("stopMeasurement", deviceId);
+        }
+#elif UNITY_IOS && !UNITY_EDITOR
+        _ble_stopMeasurement(deviceId);
+#endif
+    }
+
+    public void PauseMeasurement(string deviceId)
+    {
+#if UNITY_ANDROID && !UNITY_EDITOR
+        using(var jc = new AndroidJavaClass(ANDROID_CLASS))
+        {
+            jc.CallStatic("pauseMeasurement", deviceId);
+        }
+#elif UNITY_IOS && !UNITY_EDITOR
+        _ble_pauseMeasurement(deviceId);
+#endif
+    }
+
+    public void SendControl(string deviceId, byte[] payload, string action)
+    {
+        if (payload == null || payload.Length == 0)
+            return;
+
+        string base64 = Convert.ToBase64String(payload);
+        action ??= string.Empty;
+
+#if UNITY_ANDROID && !UNITY_EDITOR
+        using (var jc = new AndroidJavaClass(ANDROID_CLASS))
+        {
+            jc.CallStatic("sendControl", deviceId, base64, action);
+        }
+#elif UNITY_IOS && !UNITY_EDITOR
+        _ble_sendControl(deviceId, base64, action);
 #endif
     }
 
@@ -137,7 +202,15 @@ public class BLEPlugin : MonoBehaviour
     [System.Runtime.InteropServices.DllImport("__Internal")]
     private static extern void _ble_stopScan();
     [System.Runtime.InteropServices.DllImport("__Internal")]
-    private static extern void _ble_connect(string deviceId);
+    private static extern void _ble_connect(string deviceId, string profileJson);
+    [System.Runtime.InteropServices.DllImport("__Internal")]
+    private static extern void _ble_startMeasurement(string deviceId);
+    [System.Runtime.InteropServices.DllImport("__Internal")]
+    private static extern void _ble_stopMeasurement(string deviceId);
+    [System.Runtime.InteropServices.DllImport("__Internal")]
+    private static extern void _ble_pauseMeasurement(string deviceId);
+    [System.Runtime.InteropServices.DllImport("__Internal")]
+    private static extern void _ble_sendControl(string deviceId, string base64Payload, string action);
     [System.Runtime.InteropServices.DllImport("__Internal")]
     private static extern void _ble_readCharacteristic(string serviceUuid, string charUuid);
     [System.Runtime.InteropServices.DllImport("__Internal")]
