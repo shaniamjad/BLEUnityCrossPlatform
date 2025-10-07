@@ -19,11 +19,22 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
     [SerializeField] private TMP_Text line2Text; // For secondary data (Accel, etc.)
     [SerializeField] private TMP_Text line3Text; // For debug or misc info
 
+    [Header("Measurement Controls")]
+    [SerializeField] private Button startMeasurementButton;
+    [SerializeField] private Button pauseMeasurementButton;
+    [SerializeField] private Button stopMeasurementButton;
+    [SerializeField] private TMP_Text measurementStatusText;
+
     private BleDevice device;
 
     // Device-specific parsers
     private MovellaSignalParser movellaParser;
     private BiopotSignalParser biopotParser;
+
+    private string lastLine1 = string.Empty;
+    private string lastLine2 = string.Empty;
+    private string lastLine3 = string.Empty;
+    private bool hasProfile;
 
     #region Unity Lifecycle
     private void OnEnable()
@@ -47,6 +58,7 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
         device = dev;
 
         nameText.text = dev.name ?? "(Unnamed)";
+        hasProfile = BleDeviceProfiles.TryGetProfile(dev.type) != null;
         UpdateStatus(dev);
 
         // Initialize parser based on device type
@@ -63,10 +75,21 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
 
         connectButton.onClick.RemoveAllListeners();
         disconnectButton.onClick.RemoveAllListeners();
+        if (startMeasurementButton != null) startMeasurementButton.onClick.RemoveAllListeners();
+        if (pauseMeasurementButton != null) pauseMeasurementButton.onClick.RemoveAllListeners();
+        if (stopMeasurementButton != null) stopMeasurementButton.onClick.RemoveAllListeners();
 
         connectButton.onClick.AddListener(() =>
         {
-            BLEManager.Instance.Connect(dev.id, dev.type);
+            if (device == null)
+                return;
+
+            if (hasProfile)
+            {
+                TrustedDeviceStore.AddOrUpdate(device.id, device.type);
+            }
+
+            BLEManager.Instance.Connect(device.id, device.type);
         });
 
         disconnectButton.onClick.AddListener(() =>
@@ -74,10 +97,97 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
             BLEManager.Instance.DisConnect(dev.id);
         });
 
-        bool hasProfile = BleDeviceProfiles.TryGetProfile(dev.type) != null;
-        connectButton.interactable = hasProfile;
+        if (startMeasurementButton != null)
+            startMeasurementButton.onClick.AddListener(OnStartMeasurementClicked);
+        if (pauseMeasurementButton != null)
+            pauseMeasurementButton.onClick.AddListener(OnPauseMeasurementClicked);
+        if (stopMeasurementButton != null)
+            stopMeasurementButton.onClick.AddListener(OnStopMeasurementClicked);
+
+        ApplyMeasurementState(dev);
 
         BLEManager.Instance.AddListener(dev.id, this);
+    }
+
+    private void OnStartMeasurementClicked()
+    {
+        if (device == null || device.measurementState == MeasurementState.Sampling)
+            return;
+
+        BLEManager.Instance.StartMeasurement(device.id);
+    }
+
+    private void OnPauseMeasurementClicked()
+    {
+        if (device == null || device.measurementState != MeasurementState.Sampling)
+            return;
+
+        BLEManager.Instance.PauseMeasurement(device.id);
+    }
+
+    private void OnStopMeasurementClicked()
+    {
+        if (device == null || device.measurementState == MeasurementState.Idle)
+            return;
+
+        BLEManager.Instance.StopMeasurement(device.id);
+    }
+
+    private void ApplyMeasurementState(BleDevice dev)
+    {
+        if (dev == null)
+            return;
+
+        MeasurementState state = dev.measurementState;
+        bool connected = dev.isConnected;
+
+        if (measurementStatusText != null)
+        {
+            string message;
+            if (!connected)
+            {
+                message = "<color=red>Disconnected</color>";
+                if (!string.IsNullOrEmpty(lastLine1) || !string.IsNullOrEmpty(lastLine2) || !string.IsNullOrEmpty(lastLine3))
+                {
+                    message += " — last sample saved";
+                }
+            }
+            else if (state == MeasurementState.Sampling)
+            {
+                message = "<color=green>Sampling...</color>";
+            }
+            else if (state == MeasurementState.Paused)
+            {
+                message = "<color=yellow>Paused</color>";
+            }
+            else if (dev.isReady)
+            {
+                message = "<color=#cccccc>Ready</color>";
+            }
+            else
+            {
+                message = "<color=#cccccc>Stopped</color>";
+            }
+
+            measurementStatusText.text = message;
+        }
+
+        if (startMeasurementButton != null)
+            startMeasurementButton.interactable = connected && state != MeasurementState.Sampling;
+        if (pauseMeasurementButton != null)
+            pauseMeasurementButton.interactable = connected && state == MeasurementState.Sampling;
+        if (stopMeasurementButton != null)
+            stopMeasurementButton.interactable = connected && (state == MeasurementState.Sampling || state == MeasurementState.Paused);
+    }
+
+    private void CacheLastValues()
+    {
+        if (line1Text != null)
+            lastLine1 = line1Text.text;
+        if (line2Text != null)
+            lastLine2 = line2Text.text;
+        if (line3Text != null)
+            lastLine3 = line3Text.text;
     }
 
     /// <summary>
@@ -86,22 +196,33 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
     public void UpdateStatus(BleDevice dev)
     {
         device = dev;
+        hasProfile = BleDeviceProfiles.TryGetProfile(dev.type) != null;
         bool connected = dev.isConnected;
 
         string rssiText = dev.rssi != 0 ? $" (RSSI {dev.rssi})" : string.Empty;
-        statusText.text = connected
-            ? "<color=green>Connected</color>"
-            : $"<color=red>Disconnected</color>{rssiText}";
+        if (connected)
+        {
+            statusText.text = "<color=green>Connected</color>";
+        }
+        else if (dev.isAutoConnecting)
+        {
+            statusText.text = $"<color=yellow>Auto-connecting...</color>{rssiText}";
+        }
+        else
+        {
+            statusText.text = $"<color=red>Disconnected</color>{rssiText}";
+        }
+
+        if (!string.IsNullOrEmpty(dev.connectionNote))
+        {
+            statusText.text += $"\n<color=#cccccc>{dev.connectionNote}</color>";
+        }
+
         connectButton.gameObject.SetActive(!connected);
         disconnectButton.gameObject.SetActive(connected);
+        connectButton.interactable = hasProfile && !dev.isAutoConnecting;
 
-        // Clear data when disconnected
-        if (!connected)
-        {
-            line1Text.text = "";
-            line2Text.text = "";
-            line3Text.text = "";
-        }
+        ApplyMeasurementState(dev);
     }
 
     #region IBLEDeviceListener Implementation
@@ -110,15 +231,34 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
     {
         Debug.Log($"[UI_BLEDeviceItem] {dev.name} connected");
         UpdateStatus(dev);
-        line1Text.text = "Waiting for data...";
-        line2Text.text = "";
-        line3Text.text = "";
+        if (!string.IsNullOrEmpty(lastLine1))
+            line1Text.text = lastLine1;
+        else
+            line1Text.text = "Waiting for data...";
+
+        line2Text.text = string.IsNullOrEmpty(lastLine2) ? string.Empty : lastLine2;
+        line3Text.text = string.IsNullOrEmpty(lastLine3) ? string.Empty : lastLine3;
     }
 
     public void OnDisconnected(BleDevice dev)
     {
         Debug.Log($"[UI_BLEDeviceItem] {dev.name} disconnected");
         UpdateStatus(dev);
+        line1Text.text = string.Empty;
+        line2Text.text = string.Empty;
+        line3Text.text = string.Empty;
+    }
+
+    public void OnReady(BleDevice dev)
+    {
+        device = dev;
+        ApplyMeasurementState(dev);
+    }
+
+    public void OnMeasurementStateChanged(BleDevice dev, MeasurementState state)
+    {
+        device = dev;
+        ApplyMeasurementState(dev);
     }
 
     public void OnData(BleDevice dev, byte[] rawData)
@@ -171,6 +311,8 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
                 }
                 break;
         }
+
+        CacheLastValues();
     }
 
     #endregion

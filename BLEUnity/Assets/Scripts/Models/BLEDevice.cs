@@ -8,7 +8,12 @@ public enum DeviceType
     BioPot = 2,
 }
 
-
+public enum MeasurementState
+{
+    Idle,
+    Sampling,
+    Paused
+}
 
 [System.Serializable]
 public class BleEvent
@@ -21,7 +26,6 @@ public class BleEvent
     public int rssi;
 }
 
-
 [System.Serializable]
 public class BleDevice
 {
@@ -30,6 +34,11 @@ public class BleDevice
     public DeviceType type;
     public bool isConnected;
     public int rssi;
+
+    public bool isReady;
+    public bool isAutoConnecting;
+    public bool isTrusted;
+    public string connectionNote;
+    public MeasurementState measurementState = MeasurementState.Idle;
+    public bool autoConnectFailed;
 }
-
-

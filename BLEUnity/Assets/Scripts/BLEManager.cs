@@ -22,6 +22,14 @@ public class BLEManager : MonoBehaviour
 
     private readonly Dictionary<string, List<IBLEDeviceListener>> listeners = new();
 
+    private const float InitialScanDurationSeconds = 15f;
+    private const float AutoConnectTimeoutSeconds = 15f;
+
+    private bool initialAutoScanActive;
+    private bool userExtendedInitialScan;
+    private Coroutine initialScanCoroutine;
+    private readonly Dictionary<string, Coroutine> autoConnectTimeouts = new();
+
     private void Awake()
     {
         if (Instance == null)
@@ -37,8 +45,8 @@ public class BLEManager : MonoBehaviour
 
     private IEnumerator Start()
     {
-        startScan.onClick.AddListener(() => BLEPlugin.Instance.StartScan());
-        stopScan.onClick.AddListener(() => BLEPlugin.Instance.StopScan());
+        startScan.onClick.AddListener(OnStartScanClicked);
+        stopScan.onClick.AddListener(OnStopScanClicked);
 
         // 1. Request BLE permissions
         BLEPlugin.Instance.RequestPermissions();
@@ -46,6 +54,49 @@ public class BLEManager : MonoBehaviour
 
         // 2. Initialize native BLE
         BLEPlugin.Instance.Init();
+
+        if (initialScanCoroutine != null)
+            StopCoroutine(initialScanCoroutine);
+        initialScanCoroutine = StartCoroutine(RunInitialDiscoveryScan());
+    }
+
+    private void OnStartScanClicked()
+    {
+        if (initialAutoScanActive)
+            userExtendedInitialScan = true;
+
+        BLEPlugin.Instance.StartScan();
+    }
+
+    private void OnStopScanClicked()
+    {
+        BLEPlugin.Instance.StopScan();
+        if (initialAutoScanActive)
+            initialAutoScanActive = false;
+    }
+
+    private IEnumerator RunInitialDiscoveryScan()
+    {
+        initialAutoScanActive = true;
+        userExtendedInitialScan = false;
+
+        BLEPlugin.Instance.StartScan();
+
+        float elapsed = 0f;
+        while (elapsed < InitialScanDurationSeconds && initialAutoScanActive)
+        {
+            yield return null;
+            elapsed += Time.deltaTime;
+        }
+
+        if (initialAutoScanActive && !userExtendedInitialScan)
+        {
+            BLEPlugin.Instance.StopScan();
+        }
+
+        initialAutoScanActive = false;
+        userExtendedInitialScan = false;
+        initialScanCoroutine = null;
     }
 
     // ----------------------------------------------------------------------
@@ -64,13 +115,18 @@ public class BLEManager : MonoBehaviour
         if (!devices.ContainsKey(ev.id) && !string.IsNullOrEmpty(ev.id))
         {
             DeviceType detectedType = BleDeviceProfiles.DetectDeviceType(ev.deviceType, ev.name);
+            if (TrustedDeviceStore.TryGet(ev.id, out var record) && detectedType == DeviceType.Unknown)
+                detectedType = record.type;
+
             devices[ev.id] = new BleDevice
             {
                 id = ev.id,
                 name = ev.name,
                 type = detectedType,
                 isConnected = false,
-                rssi = ev.rssi
+                rssi = ev.rssi,
+                isTrusted = TrustedDeviceStore.IsTrusted(ev.id),
+                connectionNote = string.Empty
             };
         }
 
@@ -78,10 +134,16 @@ public class BLEManager : MonoBehaviour
         {
             if (!string.IsNullOrEmpty(ev.name)) existingDevice.name = ev.name;
             var detectedType = BleDeviceProfiles.DetectDeviceType(ev.deviceType, ev.name ?? existingDevice.name);
+            if (detectedType == DeviceType.Unknown && TrustedDeviceStore.TryGet(ev.id, out var record))
+                detectedType = record.type;
+
             if (detectedType != DeviceType.Unknown)
             {
                 existingDevice.type = detectedType;
             }
+
+            existingDevice.isTrusted = TrustedDeviceStore.IsTrusted(ev.id);
+
             if (ev.eventType == "scanResult")
             {
                 existingDevice.rssi = ev.rssi;
@@ -92,11 +154,17 @@ public class BLEManager : MonoBehaviour
         switch (ev.eventType)
         {
             case "scanResult":
+                if (devices.TryGetValue(ev.id, out var scannedDevice))
+                {
+                    HandleScanResult(scannedDevice);
+                }
                 break;
 
             case "ready":
                 if (devices.TryGetValue(ev.id, out var readyDevice))
                 {
+                    readyDevice.isReady = true;
+                    NotifyReady(readyDevice);
                     HandleDeviceReady(readyDevice);
                 }
                 break;
@@ -104,7 +172,13 @@ public class BLEManager : MonoBehaviour
             case "connected":
                 if (devices.TryGetValue(ev.id, out var connectedDevice))
                 {
+                    CancelAutoConnectTimeout(ev.id);
                     connectedDevice.isConnected = true;
+                    connectedDevice.isAutoConnecting = false;
+                    connectedDevice.autoConnectFailed = false;
+                    connectedDevice.connectionNote = string.Empty;
+                    connectedDevice.isReady = false;
+                    SetMeasurementState(connectedDevice, MeasurementState.Idle);
                     NotifyConnected(connectedDevice); // ✅ notify listeners
                 }
                 break;
@@ -112,7 +186,13 @@ public class BLEManager : MonoBehaviour
             case "disconnected":
                 if (devices.TryGetValue(ev.id, out var disconnectedDevice))
                 {
+                    CancelAutoConnectTimeout(ev.id);
                     disconnectedDevice.isConnected = false;
+                    disconnectedDevice.isReady = false;
+                    disconnectedDevice.isAutoConnecting = false;
+                    if (!string.Equals(disconnectedDevice.connectionNote, "Auto-connect timed out", StringComparison.Ordinal))
+                        disconnectedDevice.connectionNote = string.Empty;
+                    SetMeasurementState(disconnectedDevice, MeasurementState.Idle);
                     NotifyDisconnected(disconnectedDevice); // ✅ notify listeners
                 }
                 break;
@@ -125,7 +205,8 @@ public class BLEManager : MonoBehaviour
                 break;
         }
 
-        UI_BLEDeviceList.Instance.Refresh(devices.Values);
+        if (UI_BLEDeviceList.Instance != null)
+            UI_BLEDeviceList.Instance.Refresh(devices.Values);
     }
 
     // ----------------------------------------------------------------------
@@ -156,10 +237,60 @@ public class BLEManager : MonoBehaviour
                 break;
         }
     }
+    private void HandleScanResult(BleDevice device)
+    {
+        if (device == null)
+            return;
 
+        if (device.isTrusted)
+        {
+            TryBeginAutoConnect(device);
+        }
+    }
 
+    private void TryBeginAutoConnect(BleDevice device)
+    {
+        if (device == null)
+            return;
 
+        if (device.isConnected || device.isAutoConnecting || device.autoConnectFailed)
+            return;
 
+        Connect(device.id, device.type, initiatedByAuto: true);
+    }
+
+    private void ScheduleAutoConnectTimeout(string deviceId)
+    {
+        if (autoConnectTimeouts.TryGetValue(deviceId, out var routine))
+            StopCoroutine(routine);
+
+        autoConnectTimeouts[deviceId] = StartCoroutine(AutoConnectTimeout(deviceId));
+    }
+
+    private IEnumerator AutoConnectTimeout(string deviceId)
+    {
+        yield return new WaitForSeconds(AutoConnectTimeoutSeconds);
+
+        if (devices.TryGetValue(deviceId, out var device) && !device.isConnected)
+        {
+            device.isAutoConnecting = false;
+            device.autoConnectFailed = true;
+            device.connectionNote = "Auto-connect timed out";
+            if (UI_BLEDeviceList.Instance != null)
+                UI_BLEDeviceList.Instance.Refresh(devices.Values);
+        }
+
+        autoConnectTimeouts.Remove(deviceId);
+    }
+
+    private void CancelAutoConnectTimeout(string deviceId)
+    {
+        if (autoConnectTimeouts.TryGetValue(deviceId, out var routine))
+        {
+            StopCoroutine(routine);
+            autoConnectTimeouts.Remove(deviceId);
+        }
+    }
 
     private void HandleDeviceReady(BleDevice device)
     {
@@ -179,10 +310,7 @@ public class BLEManager : MonoBehaviour
         if (delaySeconds > 0f)
             yield return new WaitForSeconds(delaySeconds);
 
-        if (BLEPlugin.Instance != null && profile.StartCommand != null)
-        {
-            BLEPlugin.Instance.SendControl(deviceId, profile.StartCommand, "start");
-        }
+        StartMeasurement(deviceId);
     }
 
 
@@ -216,6 +344,30 @@ public class BLEManager : MonoBehaviour
         }
     }
 
+    private void SetMeasurementState(BleDevice device, MeasurementState newState)
+    {
+        if (device == null)
+            return;
+
+        if (device.measurementState == newState)
+            return;
+
+        if (newState == MeasurementState.Sampling || newState == MeasurementState.Paused)
+            device.isReady = false;
+
+        device.measurementState = newState;
+        NotifyMeasurementStateChanged(device, newState);
+    }
+
+    private void NotifyReady(BleDevice device)
+    {
+        if (listeners.TryGetValue(device.id, out var list))
+        {
+            foreach (var l in list)
+                l.OnReady(device);
+        }
+    }
+
     /// <summary>Notify listeners that a device has connected.</summary>
     private void NotifyConnected(BleDevice device)
     {
@@ -246,19 +398,75 @@ public class BLEManager : MonoBehaviour
         }
     }
 
+    private void NotifyMeasurementStateChanged(BleDevice device, MeasurementState state)
+    {
+        if (listeners.TryGetValue(device.id, out var list))
+        {
+            foreach (var l in list)
+                l.OnMeasurementStateChanged(device, state);
+        }
+    }
+
     // ----------------------------------------------------------------------
     // --- PUBLIC BLE ACTIONS ----------------------------------------------
     // ----------------------------------------------------------------------
-    public void Connect(string deviceId, DeviceType type)
+    public void Connect(string deviceId, DeviceType type, bool initiatedByAuto = false)
     {
-        var profile = BleDeviceProfiles.TryGetProfile(type);
+        if (string.IsNullOrEmpty(deviceId))
+            return;
+
+        if (!devices.TryGetValue(deviceId, out var device))
+        {
+            device = new BleDevice
+            {
+                id = deviceId,
+                type = type,
+                name = deviceId
+            };
+            devices[deviceId] = device;
+        }
+
+        if (type != DeviceType.Unknown)
+            device.type = type;
+
+        device.isTrusted = TrustedDeviceStore.IsTrusted(device.id);
+
+        var profile = BleDeviceProfiles.TryGetProfile(device.type);
         if (profile == null)
         {
             Debug.LogWarning($"[BLEManager] No device profile registered for {type}. Unable to connect to {deviceId}.");
+            device.isAutoConnecting = false;
+            device.connectionNote = "Profile unavailable";
+            UI_BLEDeviceList.Instance.Refresh(devices.Values);
             return;
         }
 
+        if (BLEPlugin.Instance == null)
+        {
+            device.connectionNote = "BLE plugin unavailable";
+            device.isAutoConnecting = false;
+            UI_BLEDeviceList.Instance.Refresh(devices.Values);
+            return;
+        }
+
+        device.isAutoConnecting = initiatedByAuto;
+
+        if (initiatedByAuto)
+        {
+            device.autoConnectFailed = false;
+            device.connectionNote = "Auto-connecting...";
+            ScheduleAutoConnectTimeout(deviceId);
+        }
+        else
+        {
+            device.autoConnectFailed = true;
+            CancelAutoConnectTimeout(deviceId);
+            device.connectionNote = "Connecting...";
+        }
+
         BLEPlugin.Instance.Connect(deviceId, profile);
+        if (UI_BLEDeviceList.Instance != null)
+            UI_BLEDeviceList.Instance.Refresh(devices.Values);
     }
 
     public void DisConnect(string deviceId) =>
@@ -272,11 +480,15 @@ public class BLEManager : MonoBehaviour
         if (!devices.TryGetValue(deviceId, out var device))
             return;
 
+        if (!device.isConnected || device.measurementState == MeasurementState.Sampling)
+            return;
+
         var profile = BleDeviceProfiles.TryGetProfile(device.type);
-        if (profile?.StartCommand != null)
-        {
-            BLEPlugin.Instance.SendControl(deviceId, profile.StartCommand, "start");
-        }
+        if (profile?.StartCommand == null)
+            return;
+
+        BLEPlugin.Instance.SendControl(deviceId, profile.StartCommand, "start");
+        SetMeasurementState(device, MeasurementState.Sampling);
     }
 
     public void StopMeasurement(string deviceId)
@@ -284,11 +496,15 @@ public class BLEManager : MonoBehaviour
         if (!devices.TryGetValue(deviceId, out var device))
             return;
 
+        if (!device.isConnected || device.measurementState == MeasurementState.Idle)
+            return;
+
         var profile = BleDeviceProfiles.TryGetProfile(device.type);
-        if (profile?.StopCommand != null)
-        {
-            BLEPlugin.Instance.SendControl(deviceId, profile.StopCommand, "stop");
-        }
+        if (profile?.StopCommand == null)
+            return;
+
+        BLEPlugin.Instance.SendControl(deviceId, profile.StopCommand, "stop");
+        SetMeasurementState(device, MeasurementState.Idle);
     }
 
     public void PauseMeasurement(string deviceId)
@@ -296,10 +512,14 @@ public class BLEManager : MonoBehaviour
         if (!devices.TryGetValue(deviceId, out var device))
             return;
 
+        if (!device.isConnected || device.measurementState != MeasurementState.Sampling)
+            return;
+
         var profile = BleDeviceProfiles.TryGetProfile(device.type);
-        if (profile?.PauseCommand != null)
-        {
-            BLEPlugin.Instance.SendControl(deviceId, profile.PauseCommand, "pause");
-        }
+        if (profile?.PauseCommand == null)
+            return;
+
+        BLEPlugin.Instance.SendControl(deviceId, profile.PauseCommand, "pause");
+        SetMeasurementState(device, MeasurementState.Paused);
     }
 }
