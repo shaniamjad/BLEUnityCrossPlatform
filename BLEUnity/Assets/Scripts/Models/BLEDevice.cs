@@ -8,6 +8,14 @@ public enum DeviceType
     BioPot = 2,
 }
 
+public enum MeasurementState
+{
+    Idle = 0,
+    Starting = 1,
+    Sampling = 2,
+    Paused = 3
+}
+
 
 
 [System.Serializable]
@@ -30,6 +38,7 @@ public class BleDevice
     public DeviceType type;
     public bool isConnected;
     public int rssi;
+    public MeasurementState measurementState = MeasurementState.Idle;
 }
 
 

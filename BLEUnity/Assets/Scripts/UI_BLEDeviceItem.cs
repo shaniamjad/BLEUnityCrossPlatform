@@ -14,12 +14,25 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
     [SerializeField] private Button connectButton;
     [SerializeField] private Button disconnectButton;
 
+    [Header("Measurement Controls")]
+    [SerializeField] private Button startMeasurementButton;
+    [SerializeField] private Button pauseMeasurementButton;
+    [SerializeField] private Button stopMeasurementButton;
+    [SerializeField] private TMP_Text measurementStatusText;
+
     [Header("Data Output")]
     [SerializeField] private TMP_Text line1Text; // For main parsed data (EEG/Quaternion)
     [SerializeField] private TMP_Text line2Text; // For secondary data (Accel, etc.)
     [SerializeField] private TMP_Text line3Text; // For debug or misc info
 
     private BleDevice device;
+    private MeasurementState currentMeasurementState = MeasurementState.Idle;
+
+    private string lastLine1;
+    private string lastLine2;
+    private string lastLine3;
+    private bool hasData;
+    private bool dataStale;
 
     // Device-specific parsers
     private MovellaSignalParser movellaParser;
@@ -45,6 +58,10 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
     public void Setup(BleDevice dev)
     {
         device = dev;
+
+        lastLine1 = lastLine2 = lastLine3 = string.Empty;
+        hasData = false;
+        dataStale = false;
 
         nameText.text = dev.name ?? "(Unnamed)";
         UpdateStatus(dev);
@@ -74,10 +91,44 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
             BLEManager.Instance.DisConnect(dev.id);
         });
 
+        if (startMeasurementButton != null)
+        {
+            startMeasurementButton.onClick.RemoveAllListeners();
+            startMeasurementButton.onClick.AddListener(() =>
+            {
+                if (BLEManager.Instance != null)
+                    BLEManager.Instance.StartMeasurement(dev.id);
+            });
+        }
+
+        if (pauseMeasurementButton != null)
+        {
+            pauseMeasurementButton.onClick.RemoveAllListeners();
+            pauseMeasurementButton.onClick.AddListener(() =>
+            {
+                if (BLEManager.Instance != null)
+                    BLEManager.Instance.PauseMeasurement(dev.id);
+            });
+        }
+
+        if (stopMeasurementButton != null)
+        {
+            stopMeasurementButton.onClick.RemoveAllListeners();
+            stopMeasurementButton.onClick.AddListener(() =>
+            {
+                if (BLEManager.Instance != null)
+                    BLEManager.Instance.StopMeasurement(dev.id);
+            });
+        }
+
         bool hasProfile = BleDeviceProfiles.TryGetProfile(dev.type) != null;
         connectButton.interactable = hasProfile;
 
         BLEManager.Instance.AddListener(dev.id, this);
+
+        currentMeasurementState = dev.measurementState;
+        UpdateMeasurementUI(currentMeasurementState);
+        RefreshDataLabels();
     }
 
     /// <summary>
@@ -95,13 +146,104 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
         connectButton.gameObject.SetActive(!connected);
         disconnectButton.gameObject.SetActive(connected);
 
-        // Clear data when disconnected
-        if (!connected)
+        UpdateMeasurementUI(dev.measurementState);
+    }
+
+    private void UpdateMeasurementUI(MeasurementState state)
+    {
+        currentMeasurementState = state;
+        bool connected = device != null && device.isConnected;
+
+        if (measurementStatusText != null)
         {
-            line1Text.text = "";
-            line2Text.text = "";
-            line3Text.text = "";
+            if (!connected)
+            {
+                measurementStatusText.text = "<color=#888888>Disconnected</color>";
+            }
+            else
+            {
+                switch (state)
+                {
+                    case MeasurementState.Sampling:
+                        measurementStatusText.text = "<color=green>Sampling…</color>";
+                        break;
+                    case MeasurementState.Paused:
+                        measurementStatusText.text = "<color=#ffcc00>Paused</color>";
+                        break;
+                    case MeasurementState.Starting:
+                        measurementStatusText.text = "Starting…";
+                        break;
+                    default:
+                        measurementStatusText.text = "<color=#888888>Stopped</color>";
+                        break;
+                }
+            }
         }
+
+        if (startMeasurementButton != null)
+            startMeasurementButton.interactable = connected && (state == MeasurementState.Idle || state == MeasurementState.Paused);
+        if (pauseMeasurementButton != null)
+            pauseMeasurementButton.interactable = connected && state == MeasurementState.Sampling;
+        if (stopMeasurementButton != null)
+            stopMeasurementButton.interactable = connected && (state == MeasurementState.Sampling || state == MeasurementState.Paused || state == MeasurementState.Starting);
+
+        bool shouldMarkStale = !connected || state != MeasurementState.Sampling;
+        dataStale = shouldMarkStale && hasData;
+
+        if (!hasData && connected && state == MeasurementState.Sampling)
+        {
+            dataStale = true;
+        }
+
+        RefreshDataLabels();
+    }
+
+    private void RefreshDataLabels()
+    {
+        bool connected = device != null && device.isConnected;
+
+        if (!hasData)
+        {
+            if (line1Text != null)
+            {
+                if (connected)
+                {
+                    line1Text.text = dataStale
+                        ? "<color=#888888>Waiting for data…</color>"
+                        : "Waiting for data…";
+                }
+                else
+                {
+                    line1Text.text = string.Empty;
+                }
+            }
+
+            if (line2Text != null)
+                line2Text.text = string.Empty;
+            if (line3Text != null)
+                line3Text.text = string.Empty;
+            return;
+        }
+
+        SetDataText(line1Text, lastLine1);
+        SetDataText(line2Text, lastLine2);
+        SetDataText(line3Text, lastLine3);
+    }
+
+    private void SetDataText(TMP_Text label, string value)
+    {
+        if (label == null)
+            return;
+
+        if (string.IsNullOrEmpty(value))
+        {
+            label.text = string.Empty;
+            return;
+        }
+
+        label.text = dataStale
+            ? $"{value} <color=#888888><i>(last)</i></color>"
+            : value;
     }
 
     #region IBLEDeviceListener Implementation
@@ -110,9 +252,6 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
     {
         Debug.Log($"[UI_BLEDeviceItem] {dev.name} connected");
         UpdateStatus(dev);
-        line1Text.text = "Waiting for data...";
-        line2Text.text = "";
-        line3Text.text = "";
     }
 
     public void OnDisconnected(BleDevice dev)
@@ -126,15 +265,18 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
         if (rawData == null || rawData.Length == 0)
             return;
 
+        bool updated = false;
+
         switch (dev.type)
         {
             case DeviceType.Movella:
                 if (movellaParser != null && movellaParser.TryParse(rawData))
                 {
                     // Display parsed Movella sensor data
-                    line1Text.text = $"<b>Quat:</b> {string.Join(", ", movellaParser.Quaternion)}";
-                    line2Text.text = $"<b>Accel:</b> {string.Join(", ", movellaParser.FreeAcceleration)}";
-                    line3Text.text = $"<b>Status:</b> {movellaParser.Status} | ClipA:{movellaParser.ClippingCountAccelerometer} ClipG:{movellaParser.ClippingCountGyroscope}";
+                    lastLine1 = $"<b>Quat:</b> {string.Join(", ", movellaParser.Quaternion)}";
+                    lastLine2 = $"<b>Accel:</b> {string.Join(", ", movellaParser.FreeAcceleration)}";
+                    lastLine3 = $"<b>Status:</b> {movellaParser.Status} | ClipA:{movellaParser.ClippingCountAccelerometer} ClipG:{movellaParser.ClippingCountGyroscope}";
+                    updated = true;
                 }
                 break;
 
@@ -150,7 +292,8 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
                         string eegValues = "";
                         for (int s = 0; s < Mathf.Min(eeg.GetLength(1), 5); s++)
                             eegValues += eeg[0, s].ToString("F2") + ", ";
-                        line1Text.text = $"<b>EEG (Ch0):</b> {eegValues}";
+                        lastLine1 = $"<b>EEG (Ch0):</b> {eegValues}";
+                        updated = true;
                     }
 
                     if (acc != null && acc.Length > 0)
@@ -158,7 +301,8 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
                         string accValues = "";
                         for (int i = 0; i < Mathf.Min(acc.Length, 3); i++)
                             accValues += acc[i].ToString("F2") + ", ";
-                        line2Text.text = $"<b>Accel:</b> {accValues}";
+                        lastLine2 = $"<b>Accel:</b> {accValues}";
+                        updated = true;
                     }
 
                     if (bio != null && bio.Length > 0)
@@ -166,11 +310,27 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
                         string bioValues = "";
                         for (int i = 0; i < Mathf.Min(bio.Length, 3); i++)
                             bioValues += bio[i].ToString("F2") + ", ";
-                        line3Text.text = $"<b>Bio:</b> {bioValues}";
+                        lastLine3 = $"<b>Bio:</b> {bioValues}";
+                        updated = true;
                     }
                 }
                 break;
         }
+
+        if (updated)
+        {
+            hasData = true;
+            dataStale = false;
+            UpdateMeasurementUI(currentMeasurementState);
+        }
+    }
+
+    public void OnMeasurementStateChanged(BleDevice dev, MeasurementState state)
+    {
+        if (device == null || dev.id != device.id)
+            return;
+
+        UpdateMeasurementUI(state);
     }
 
     #endregion
