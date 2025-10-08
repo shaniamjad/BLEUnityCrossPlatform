@@ -9,6 +9,7 @@ public class TrustedDeviceRecord
 {
     public string id;
     public DeviceType type;
+    public bool? lastConnected;
 }
 
 public static class TrustedDeviceStore
@@ -92,11 +93,58 @@ public static class TrustedDeviceStore
         var existing = cache.FirstOrDefault(r => r.id == id);
         if (existing == null)
         {
-            cache.Add(new TrustedDeviceRecord { id = id, type = type });
+            cache.Add(new TrustedDeviceRecord
+            {
+                id = id,
+                type = type,
+                lastConnected = null
+            });
         }
         else
         {
             existing.type = type;
+        }
+
+        Save();
+    }
+
+    public static bool ShouldAutoReconnect(string id)
+    {
+        if (TryGet(id, out var record))
+        {
+            // Default to auto-reconnect unless the last known state was an
+            // intentional disconnect (false). Null indicates legacy data or an
+            // unknown state, so we continue to auto-reconnect for backward
+            // compatibility.
+            return record.lastConnected != false;
+        }
+
+        return false;
+    }
+
+    public static void SetLastConnectionState(string id, DeviceType type, bool connected)
+    {
+        if (string.IsNullOrEmpty(id))
+            return;
+
+        if (cache == null)
+            cache = new List<TrustedDeviceRecord>();
+
+        var record = cache.FirstOrDefault(r => r.id == id);
+        if (record == null)
+        {
+            record = new TrustedDeviceRecord
+            {
+                id = id,
+                type = type,
+                lastConnected = connected
+            };
+            cache.Add(record);
+        }
+        else
+        {
+            record.type = type;
+            record.lastConnected = connected;
         }
 
         Save();
