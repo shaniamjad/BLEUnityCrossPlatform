@@ -180,6 +180,7 @@ public class BLEManager : MonoBehaviour
                     connectedDevice.isReady = false;
                     SetMeasurementState(connectedDevice, MeasurementState.Idle);
                     NotifyConnected(connectedDevice); // ✅ notify listeners
+                    TrustedDeviceStore.SetLastConnectionState(connectedDevice.id, connectedDevice.type, true);
                 }
                 break;
 
@@ -244,7 +245,16 @@ public class BLEManager : MonoBehaviour
 
         if (device.isTrusted)
         {
-            TryBeginAutoConnect(device);
+            if (TrustedDeviceStore.ShouldAutoReconnect(device.id))
+            {
+                TryBeginAutoConnect(device);
+            }
+            else
+            {
+                device.isAutoConnecting = false;
+                device.autoConnectFailed = false;
+                device.connectionNote = string.Empty;
+            }
         }
     }
 
@@ -469,8 +479,15 @@ public class BLEManager : MonoBehaviour
             UI_BLEDeviceList.Instance.Refresh(devices.Values);
     }
 
-    public void DisConnect(string deviceId) =>
+    public void DisConnect(string deviceId)
+    {
+        if (devices.TryGetValue(deviceId, out var device))
+            TrustedDeviceStore.SetLastConnectionState(deviceId, device.type, false);
+        else
+            TrustedDeviceStore.SetLastConnectionState(deviceId, DeviceType.Unknown, false);
+
         BLEPlugin.Instance.Disconnect(deviceId);
+    }
 
     public void StopScan() =>
         BLEPlugin.Instance.StopScan();
