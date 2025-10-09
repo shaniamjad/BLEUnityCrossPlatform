@@ -54,6 +54,9 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
         device = dev;
 
         nameText.text = dev.name ?? "(Unnamed)";
+        line1Text.text = string.Empty;
+        line2Text.text = string.Empty;
+        line3Text.text = string.Empty;
         hasProfile = BleDeviceProfiles.TryGetProfile(dev.type) != null;
         UpdateStatus(dev);
 
