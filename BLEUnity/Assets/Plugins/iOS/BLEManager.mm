@@ -145,7 +145,7 @@ static BLEManager *_shared = nil;
 - (void)start {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!self.central) {
-            self.central = [[CBCentralManager alloc] initWithDelegate:self queue:dispatch_get_main_queue()];
+            self.central = [[CBCentralManager alloc] initWithDelegate:self queue:dispatch_get_main_queue() options:@{CBCentralManagerOptionShowPowerAlertKey: @YES}];
         }
         [self sendUnityEvent:@{ @"eventType": @"init" }];
     });
