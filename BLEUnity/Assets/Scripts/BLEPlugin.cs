@@ -168,7 +168,7 @@ public class BLEPlugin : MonoBehaviour
             jc.CallStatic("disconnect", deviceId);
         }
 #elif UNITY_IOS && !UNITY_EDITOR
-        _DisconnectDevice(deviceId); // bridge to Obj-C
+        _ble_disconnect(deviceId);
 #endif
     }
 
@@ -215,6 +215,8 @@ public class BLEPlugin : MonoBehaviour
     private static extern void _ble_readCharacteristic(string serviceUuid, string charUuid);
     [System.Runtime.InteropServices.DllImport("__Internal")]
     private static extern void _ble_writeCharacteristic(string serviceUuid, string charUuid, string base64Data);
+    [System.Runtime.InteropServices.DllImport("__Internal")]
+    private static extern void _ble_disconnect(string deviceId);
 #endif
 
     private string GetUnityGameObjectName() => gameObject.name;
