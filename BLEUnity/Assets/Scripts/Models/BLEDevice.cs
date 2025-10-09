@@ -23,6 +23,7 @@ public class BleEvent
     public string eventType;
     public string value;
     public string deviceType; // still string (comes from native JSON)
+    public string state;
     public int rssi;
 }
 

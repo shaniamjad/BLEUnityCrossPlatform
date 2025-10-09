@@ -28,6 +28,11 @@ public class BLEManager : MonoBehaviour
     private bool initialAutoScanActive;
     private bool userExtendedInitialScan;
     private Coroutine initialScanCoroutine;
+#if UNITY_IOS && !UNITY_EDITOR
+    private bool bluetoothPoweredOn;
+#else
+    private bool bluetoothPoweredOn = true;
+#endif
     private readonly Dictionary<string, Coroutine> autoConnectTimeouts = new();
 
     private void Awake()
@@ -55,6 +60,11 @@ public class BLEManager : MonoBehaviour
         // 2. Initialize native BLE
         BLEPlugin.Instance.Init();
 
+#if UNITY_IOS && !UNITY_EDITOR
+        bluetoothPoweredOn = false;
+        yield return new WaitUntil(() => bluetoothPoweredOn);
+#endif
+
         if (initialScanCoroutine != null)
             StopCoroutine(initialScanCoroutine);
         initialScanCoroutine = StartCoroutine(RunInitialDiscoveryScan());
@@ -65,7 +75,11 @@ public class BLEManager : MonoBehaviour
         if (initialAutoScanActive)
             userExtendedInitialScan = true;
 
-        BLEPlugin.Instance.StartScan();
+        if (!TryStartScan())
+        {
+            Debug.LogWarning("[BLEManager] Ignoring scan request until Bluetooth is powered on.");
+            return;
+        }
     }
 
     private void OnStopScanClicked()
@@ -80,7 +94,13 @@ public class BLEManager : MonoBehaviour
         initialAutoScanActive = true;
         userExtendedInitialScan = false;
 
-        BLEPlugin.Instance.StartScan();
+        if (!TryStartScan())
+        {
+            initialAutoScanActive = false;
+            initialScanCoroutine = null;
+            Debug.LogWarning("[BLEManager] Delaying initial scan until Bluetooth is powered on.");
+            yield break;
+        }
 
         float elapsed = 0f;
         while (elapsed < InitialScanDurationSeconds && initialAutoScanActive)
@@ -97,6 +117,15 @@ public class BLEManager : MonoBehaviour
         initialAutoScanActive = false;
         userExtendedInitialScan = false;
         initialScanCoroutine = null;
+    }
+
+    private bool TryStartScan()
+    {
+        if (!bluetoothPoweredOn)
+            return false;
+
+        BLEPlugin.Instance.StartScan();
+        return true;
     }
 
     // ----------------------------------------------------------------------
@@ -153,6 +182,9 @@ public class BLEManager : MonoBehaviour
 
         switch (ev.eventType)
         {
+            case "state":
+                HandleBluetoothStateEvent(ev);
+                break;
             case "scanResult":
                 if (devices.TryGetValue(ev.id, out var scannedDevice))
                 {
@@ -208,6 +240,27 @@ public class BLEManager : MonoBehaviour
 
         if (UI_BLEDeviceList.Instance != null)
             UI_BLEDeviceList.Instance.Refresh(devices.Values);
+    }
+
+    private void HandleBluetoothStateEvent(BleEvent ev)
+    {
+        string state = ev.state ?? string.Empty;
+        if (string.IsNullOrEmpty(state))
+            return;
+
+        bool poweredOn = string.Equals(state, "poweredOn", StringComparison.OrdinalIgnoreCase);
+
+        if (bluetoothPoweredOn == poweredOn)
+            return;
+
+        bluetoothPoweredOn = poweredOn;
+
+        Debug.Log($"[BLEManager] Bluetooth state changed: {state}");
+
+        if (!bluetoothPoweredOn && initialAutoScanActive)
+        {
+            initialAutoScanActive = false;
+        }
     }
 
     // ----------------------------------------------------------------------
