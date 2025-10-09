@@ -15,11 +15,14 @@ namespace MobileConsole
     {
         private const string ConsoleRootName = "[MobileConsoleKit]";
         private const int DefaultCapacity = 200;
+        private const int MaxTotalCharacters = 9000; // keep Text vertex count under Unity's 65k limit
+        private static readonly int NewLineLength = System.Environment.NewLine.Length;
 
         private static MobileConsoleKit _instance;
 
         private readonly List<LogEntry> _entries = new List<LogEntry>(DefaultCapacity);
-        private readonly StringBuilder _builder = new StringBuilder(DefaultCapacity * 120);
+        private readonly StringBuilder _builder = new StringBuilder(MaxTotalCharacters + 512);
+        private int _currentCharacterCount;
 
         private RectTransform _consolePanel;
         private Button _clearButton;
@@ -85,19 +88,39 @@ namespace MobileConsole
                 _ => "#FFFFFF"
             };
 
-            if (_entries.Count >= DefaultCapacity)
-            {
-                _entries.RemoveAt(0);
-            }
-
             var entry = new LogEntry
             {
                 Message = $"<color={color}>[{type}] {condition}</color>",
                 StackTrace = stackTrace
             };
 
+            entry.CharacterCount = entry.Message.Length + NewLineLength;
+            if (!string.IsNullOrEmpty(entry.StackTrace))
+            {
+                entry.CharacterCount += entry.StackTrace.Length + NewLineLength;
+            }
+
             _entries.Add(entry);
+            _currentCharacterCount += entry.CharacterCount;
+
+            TrimEntriesToCharacterBudget();
+
             _dirty = true;
+        }
+
+        private void TrimEntriesToCharacterBudget()
+        {
+            while ((_entries.Count > DefaultCapacity || _currentCharacterCount > MaxTotalCharacters) && _entries.Count > 0)
+            {
+                var removed = _entries[0];
+                _currentCharacterCount -= removed.CharacterCount;
+                _entries.RemoveAt(0);
+            }
+
+            if (_currentCharacterCount < 0)
+            {
+                _currentCharacterCount = 0;
+            }
         }
 
         private void RefreshLogView()
@@ -340,6 +363,7 @@ namespace MobileConsole
         {
             _entries.Clear();
             _builder.Clear();
+            _currentCharacterCount = 0;
             _logText.text = string.Empty;
             _scrollRect.verticalNormalizedPosition = 1f;
         }
@@ -348,6 +372,7 @@ namespace MobileConsole
         {
             public string Message;
             public string StackTrace;
+            public int CharacterCount;
         }
     }
 }
