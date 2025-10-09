@@ -1,14 +1,130 @@
 #import "BLEManager.h"
 #import <UIKit/UIKit.h>
 
-static BLEManager *_shared = nil;
+extern void UnitySendMessage(const char *, const char *, const char *);
 
-@implementation BLEManager {
-    CBCentralManager *_central;
-    NSMutableDictionary<NSString*, CBPeripheral*> *_foundPeripherals;
-    CBPeripheral *_connectedPeripheral;
-    NSMutableDictionary<CBUUID*, CBCharacteristic*> *_characteristics;
+static NSString *const kUnityCallbackMethod = @"OnNativeCallback";
+static NSTimeInterval millisecondsToSeconds(int ms) { return (NSTimeInterval)ms / 1000.0; }
+
+@interface BLEDeviceConfig : NSObject
+@property (nonatomic, copy) NSString *deviceType;
+@property (nonatomic, strong) CBUUID *serviceUuid;
+@property (nonatomic, strong) CBUUID *controlCharacteristicUuid;
+@property (nonatomic, strong) CBUUID *dataCharacteristicUuid;
+@property (nonatomic, strong) NSNumber *requestMtu;
+@property (nonatomic, strong) NSData *startCommand;
+@property (nonatomic, strong) NSData *stopCommand;
+@property (nonatomic, strong) NSData *pauseCommand;
+@property (nonatomic, assign) BOOL emitReadyEvent;
+@property (nonatomic, assign) BOOL autoStartOnNotification;
+@property (nonatomic, assign) NSInteger notificationStartDelayMs;
++ (instancetype)configFromJson:(NSString *)json error:(NSError **)error;
+@end
+
+@implementation BLEDeviceConfig
++ (instancetype)configFromJson:(NSString *)json error:(NSError *__autoreleasing  _Nullable *)error {
+    if (json.length == 0) {
+        if (error) {
+            *error = [NSError errorWithDomain:@"BLEPlugin" code:-1 userInfo:@{NSLocalizedDescriptionKey: @"Profile JSON missing"}];
+        }
+        return nil;
+    }
+
+    NSData *data = [json dataUsingEncoding:NSUTF8StringEncoding];
+    if (!data) {
+        if (error) {
+            *error = [NSError errorWithDomain:@"BLEPlugin" code:-2 userInfo:@{NSLocalizedDescriptionKey: @"Invalid profile encoding"}];
+        }
+        return nil;
+    }
+
+    NSDictionary *dict = [NSJSONSerialization JSONObjectWithData:data options:0 error:error];
+    if (!dict || ![dict isKindOfClass:[NSDictionary class]]) {
+        return nil;
+    }
+
+    BLEDeviceConfig *config = [[BLEDeviceConfig alloc] init];
+    config.deviceType = dict[@"deviceType"] ?: @"Unknown";
+
+    NSString *serviceUuid = dict[@"serviceUuid"];
+    if ([serviceUuid isKindOfClass:[NSString class]] && serviceUuid.length > 0) {
+        config.serviceUuid = [CBUUID UUIDWithString:serviceUuid];
+    }
+
+    NSString *controlUuid = dict[@"controlCharacteristicUuid"];
+    if ([controlUuid isKindOfClass:[NSString class]] && controlUuid.length > 0) {
+        config.controlCharacteristicUuid = [CBUUID UUIDWithString:controlUuid];
+    }
+
+    NSString *dataUuid = dict[@"dataCharacteristicUuid"];
+    if ([dataUuid isKindOfClass:[NSString class]] && dataUuid.length > 0) {
+        config.dataCharacteristicUuid = [CBUUID UUIDWithString:dataUuid];
+    }
+
+    id requestMtu = dict[@"requestMtu"];
+    if ([requestMtu respondsToSelector:@selector(integerValue)]) {
+        NSInteger mtuValue = [requestMtu integerValue];
+        config.requestMtu = @(mtuValue);
+    }
+
+    NSString *startCommand = dict[@"startCommand"];
+    if ([startCommand isKindOfClass:[NSString class]] && startCommand.length > 0) {
+        config.startCommand = [[NSData alloc] initWithBase64EncodedString:startCommand options:0];
+    }
+
+    NSString *stopCommand = dict[@"stopCommand"];
+    if ([stopCommand isKindOfClass:[NSString class]] && stopCommand.length > 0) {
+        config.stopCommand = [[NSData alloc] initWithBase64EncodedString:stopCommand options:0];
+    }
+
+    NSString *pauseCommand = dict[@"pauseCommand"];
+    if ([pauseCommand isKindOfClass:[NSString class]] && pauseCommand.length > 0) {
+        config.pauseCommand = [[NSData alloc] initWithBase64EncodedString:pauseCommand options:0];
+    }
+
+    config.emitReadyEvent = [dict[@"emitReadyEvent"] boolValue];
+    if (dict[@"emitReadyEvent"] == nil) {
+        config.emitReadyEvent = YES;
+    }
+
+    config.autoStartOnNotification = [dict[@"autoStartOnNotification"] boolValue];
+    config.notificationStartDelayMs = [dict[@"notificationStartDelayMs"] respondsToSelector:@selector(integerValue)]
+        ? [dict[@"notificationStartDelayMs"] integerValue] : 0;
+
+    return config;
 }
+@end
+
+@interface BLEDeviceContext : NSObject
+@property (nonatomic, strong) BLEDeviceConfig *config;
+@property (nonatomic, strong) CBPeripheral *peripheral;
+@property (nonatomic, strong) NSMutableDictionary<CBUUID*, CBCharacteristic*> *characteristics;
+@property (nonatomic, strong) CBCharacteristic *controlCharacteristic;
+@property (nonatomic, strong) CBCharacteristic *dataCharacteristic;
+@property (nonatomic, assign) BOOL readyEmitted;
+@property (nonatomic, assign) BOOL autoStartScheduled;
+@end
+
+@implementation BLEDeviceContext
+- (instancetype)init {
+    if (self = [super init]) {
+        _characteristics = [NSMutableDictionary dictionary];
+        _readyEmitted = NO;
+        _autoStartScheduled = NO;
+    }
+    return self;
+}
+@end
+
+@interface BLEManager ()
+@property (nonatomic, strong) CBCentralManager *central;
+@property (nonatomic, strong) NSMutableDictionary<NSString*, CBPeripheral*> *discoveredPeripherals;
+@property (nonatomic, strong) NSMutableDictionary<NSString*, BLEDeviceContext*> *deviceContexts;
+@end
+
+@implementation BLEManager
+
+static BLEManager *_shared = nil;
 
 + (instancetype)shared {
     static dispatch_once_t onceToken;
@@ -20,46 +136,229 @@ static BLEManager *_shared = nil;
 
 - (instancetype)init {
     if ((self = [super init])) {
-        _foundPeripherals = [NSMutableDictionary dictionary];
-        _characteristics = [NSMutableDictionary dictionary];
+        _discoveredPeripherals = [NSMutableDictionary dictionary];
+        _deviceContexts = [NSMutableDictionary dictionary];
     }
     return self;
 }
 
-- (void)setUnityObjectName:(NSString *)unityObjectName {
-    _unityObjectName = unityObjectName;
-}
-
 - (void)start {
     dispatch_async(dispatch_get_main_queue(), ^{
-        _central = [[CBCentralManager alloc] initWithDelegate:self queue:dispatch_get_main_queue()];
+        if (!self.central) {
+            self.central = [[CBCentralManager alloc] initWithDelegate:self queue:dispatch_get_main_queue()];
+        }
+        [self sendUnityEvent:@{ @"eventType": @"init" }];
     });
 }
 
 - (void)startScan {
-    if (_central.state != CBManagerStatePoweredOn) {
-        [self sendUnityEvent:@{@"event":@"error", @"message":@"Bluetooth not powered on"}];
-        return;
-    }
-    [_foundPeripherals removeAllObjects];
-    [_central scanForPeripheralsWithServices:nil options:@{CBCentralManagerScanOptionAllowDuplicatesKey:@NO}];
-    [self sendUnityEvent:@{@"event":@"scanStarted"}];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!self.central || self.central.state != CBManagerStatePoweredOn) {
+            [self sendUnityError:@"Bluetooth not powered on" deviceId:nil];
+            return;
+        }
+        [self.discoveredPeripherals removeAllObjects];
+        [self.central scanForPeripheralsWithServices:nil options:@{ CBCentralManagerScanOptionAllowDuplicatesKey: @NO }];
+        [self sendUnityEvent:@{ @"eventType": @"scanStarted" }];
+    });
 }
 
 - (void)stopScan {
-    [_central stopScan];
-    [self sendUnityEvent:@{@"event":@"scanStopped"}];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self.central stopScan];
+        [self sendUnityEvent:@{ @"eventType": @"scanStopped" }];
+    });
 }
 
-- (void)connectToDevice:(NSString*)deviceId {
-    CBPeripheral *p = _foundPeripherals[deviceId];
-    if (!p) { [self sendUnityEvent:@{@"event":@"error",@"message":@"device not found"}]; return; }
-    _connectedPeripheral = p;
-    _connectedPeripheral.delegate = self;
-    [_central connectPeripheral:_connectedPeripheral options:nil];
+- (void)connectToDevice:(NSString*)deviceId profileJson:(NSString*)profileJson {
+    if (deviceId.length == 0) {
+        [self sendUnityError:@"device id missing" deviceId:nil];
+        return;
+    }
+
+    NSError *error = nil;
+    BLEDeviceConfig *config = [BLEDeviceConfig configFromJson:profileJson error:&error];
+    if (!config) {
+        NSString *message = error.localizedDescription ?: @"invalid profile";
+        [self sendUnityError:message deviceId:deviceId];
+        return;
+    }
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        CBPeripheral *peripheral = self.discoveredPeripherals[deviceId];
+        if (!peripheral) {
+            NSUUID *uuid = [[NSUUID alloc] initWithUUIDString:deviceId];
+            if (uuid) {
+                NSArray<CBPeripheral *> *retrieved = [self.central retrievePeripheralsWithIdentifiers:@[uuid]];
+                if (retrieved.count > 0) {
+                    peripheral = retrieved.firstObject;
+                }
+            }
+        }
+
+        if (!peripheral) {
+            [self sendUnityError:@"device not found" deviceId:deviceId];
+            return;
+        }
+
+        BLEDeviceContext *context = [[BLEDeviceContext alloc] init];
+        context.config = config;
+        context.peripheral = peripheral;
+        self.deviceContexts[deviceId] = context;
+
+        peripheral.delegate = self;
+        [self.central connectPeripheral:peripheral options:nil];
+    });
 }
 
-// CBCentralManagerDelegate
+- (void)disconnectDevice:(NSString*)deviceId {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        BLEDeviceContext *context = self.deviceContexts[deviceId];
+        if (context) {
+            if (context.peripheral) {
+                [self.central cancelPeripheralConnection:context.peripheral];
+            }
+            [self.deviceContexts removeObjectForKey:deviceId];
+        }
+    });
+}
+
+- (void)startMeasurement:(NSString*)deviceId {
+    [self writeControlForDevice:deviceId payloadKey:@"startCommand" defaultAction:@"start"];
+}
+
+- (void)stopMeasurement:(NSString*)deviceId {
+    [self writeControlForDevice:deviceId payloadKey:@"stopCommand" defaultAction:@"stop"];
+}
+
+- (void)pauseMeasurement:(NSString*)deviceId {
+    [self writeControlForDevice:deviceId payloadKey:@"pauseCommand" defaultAction:@"pause"];
+}
+
+- (void)sendControl:(NSString*)deviceId base64Payload:(NSString*)payload action:(NSString*)action {
+    if (deviceId.length == 0 || payload.length == 0) {
+        return;
+    }
+    NSData *data = [[NSData alloc] initWithBase64EncodedString:payload options:0];
+    if (!data) {
+        [self sendUnityError:@"invalid control payload" deviceId:deviceId];
+        return;
+    }
+    [self writeControlForDevice:deviceId payload:data action:action ?: @"custom"];
+}
+
+- (void)readCharacteristicWithService:(NSString*)service charId:(NSString*)charId {
+    if (service.length == 0 || charId.length == 0) {
+        return;
+    }
+    CBUUID *charUUID = [CBUUID UUIDWithString:charId];
+    for (NSString *key in self.deviceContexts) {
+        BLEDeviceContext *ctx = self.deviceContexts[key];
+        CBCharacteristic *characteristic = ctx.characteristics[charUUID];
+        if (characteristic && ctx.peripheral) {
+            [ctx.peripheral readValueForCharacteristic:characteristic];
+            break;
+        }
+    }
+}
+
+- (void)writeCharacteristicWithService:(NSString*)service charId:(NSString*)charId data:(NSData*)data {
+    if (service.length == 0 || charId.length == 0 || data.length == 0) {
+        return;
+    }
+    CBUUID *charUUID = [CBUUID UUIDWithString:charId];
+    for (NSString *key in self.deviceContexts) {
+        BLEDeviceContext *ctx = self.deviceContexts[key];
+        CBCharacteristic *characteristic = ctx.characteristics[charUUID];
+        if (characteristic && ctx.peripheral) {
+            [ctx.peripheral writeValue:data forCharacteristic:characteristic type:CBCharacteristicWriteWithResponse];
+            break;
+        }
+    }
+}
+
+#pragma mark - Private helpers
+
+- (void)writeControlForDevice:(NSString *)deviceId payloadKey:(NSString *)payloadKey defaultAction:(NSString *)action {
+    BLEDeviceContext *ctx = self.deviceContexts[deviceId];
+    if (!ctx) {
+        [self sendUnityError:@"device not connected" deviceId:deviceId];
+        return;
+    }
+    NSData *payload = [ctx.config valueForKey:payloadKey];
+    if (!payload || payload.length == 0) {
+        return;
+    }
+    [self writeControlForDevice:deviceId payload:payload action:action];
+}
+
+- (void)writeControlForDevice:(NSString *)deviceId payload:(NSData *)payload action:(NSString *)action {
+    BLEDeviceContext *ctx = self.deviceContexts[deviceId];
+    if (!ctx || !ctx.peripheral) {
+        [self sendUnityError:@"device not connected" deviceId:deviceId];
+        return;
+    }
+    if (!ctx.controlCharacteristic) {
+        [self sendUnityError:@"control characteristic not available" deviceId:deviceId];
+        return;
+    }
+    [ctx.peripheral writeValue:payload forCharacteristic:ctx.controlCharacteristic type:CBCharacteristicWriteWithResponse];
+    (void)action;
+}
+
+- (void)emitReadyIfNeeded:(BLEDeviceContext *)context {
+    if (!context || context.readyEmitted == YES) {
+        return;
+    }
+    if (context.config.emitReadyEvent && context.peripheral.identifier.UUIDString.length > 0) {
+        NSString *deviceId = context.peripheral.identifier.UUIDString;
+        [self sendUnityEvent:@{
+            @"eventType": @"ready",
+            @"deviceType": context.config.deviceType ?: @"Unknown",
+            @"id": deviceId
+        }];
+    }
+    context.readyEmitted = YES;
+}
+
+- (BLEDeviceContext *)contextForPeripheral:(CBPeripheral *)peripheral {
+    for (NSString *key in self.deviceContexts) {
+        BLEDeviceContext *ctx = self.deviceContexts[key];
+        if (ctx.peripheral == peripheral) {
+            return ctx;
+        }
+    }
+    return nil;
+}
+
+- (void)sendUnityError:(NSString *)message deviceId:(NSString *)deviceId {
+    NSMutableDictionary *payload = [@{ @"eventType": @"error", @"message": message ?: @"unknown" } mutableCopy];
+    if (deviceId.length > 0) {
+        payload[@"id"] = deviceId;
+    }
+    [self sendUnityEvent:payload];
+}
+
+- (void)sendUnityEvent:(NSDictionary *)payload {
+    if (!self.unityObjectName || payload.count == 0) {
+        return;
+    }
+    NSError *error = nil;
+    NSData *jsonData = [NSJSONSerialization dataWithJSONObject:payload options:0 error:&error];
+    if (!jsonData) {
+        return;
+    }
+    NSString *json = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
+    if (!json) {
+        return;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UnitySendMessage([self.unityObjectName UTF8String], [kUnityCallbackMethod UTF8String], [json UTF8String]);
+    });
+}
+
+#pragma mark - CBCentralManagerDelegate
+
 - (void)centralManagerDidUpdateState:(CBCentralManager *)central {
     NSString *state = @"unknown";
     switch (central.state) {
@@ -67,80 +366,177 @@ static BLEManager *_shared = nil;
         case CBManagerStatePoweredOff: state = @"poweredOff"; break;
         case CBManagerStateUnauthorized: state = @"unauthorized"; break;
         case CBManagerStateUnsupported: state = @"unsupported"; break;
-        default: break;
+        case CBManagerStateResetting: state = @"resetting"; break;
+        case CBManagerStateUnknown:
+        default: state = @"unknown"; break;
     }
-    [self sendUnityEvent:@{@"event":@"state", @"state":state}];
+    [self sendUnityEvent:@{ @"eventType": @"state", @"state": state }];
 }
 
 - (void)centralManager:(CBCentralManager *)central didDiscoverPeripheral:(CBPeripheral *)peripheral
-       advertisementData:(NSDictionary<NSString *,id> *)advertisementData RSSI:(NSNumber *)RSSI {
-    if (!peripheral.identifier.UUIDString) return;
-    NSString *uuid = peripheral.identifier.UUIDString;
-    _foundPeripherals[uuid] = peripheral;
-    NSDictionary *obj = @{
-        @"event": @"scanResult",
-        @"id": uuid,
-        @"name": peripheral.name ?: @"",
-        @"rssi": RSSI
-    };
-    [self sendUnityEvent:obj];
+     advertisementData:(NSDictionary<NSString *,id> *)advertisementData RSSI:(NSNumber *)RSSI {
+    if (!peripheral.identifier.UUIDString) {
+        return;
+    }
+    self.discoveredPeripherals[peripheral.identifier.UUIDString] = peripheral;
+
+    NSString *name = peripheral.name ?: @"";
+    NSNumber *rssi = RSSI ?: @(0);
+    [self sendUnityEvent:@{
+        @"eventType": @"scanResult",
+        @"id": peripheral.identifier.UUIDString,
+        @"name": name,
+        @"deviceType": @"",
+        @"rssi": rssi
+    }];
 }
 
 - (void)centralManager:(CBCentralManager *)central didConnectPeripheral:(CBPeripheral *)peripheral {
+    BLEDeviceContext *context = [self contextForPeripheral:peripheral];
+    if (!context) {
+        return;
+    }
     [peripheral discoverServices:nil];
-    [self sendUnityEvent:@{@"event":@"connected", @"id":peripheral.identifier.UUIDString}];
+    [self sendUnityEvent:@{
+        @"eventType": @"connected",
+        @"deviceType": context.config.deviceType ?: @"Unknown",
+        @"id": peripheral.identifier.UUIDString ?: @""
+    }];
 }
 
 - (void)centralManager:(CBCentralManager *)central didFailToConnectPeripheral:(CBPeripheral *)peripheral error:(NSError *)error {
-    [self sendUnityEvent:@{@"event":@"connectFailed", @"id":peripheral.identifier.UUIDString, @"message": error.localizedDescription ?: @""}];
+    NSString *deviceId = peripheral.identifier.UUIDString ?: @"";
+    [self sendUnityError:error.localizedDescription ?: @"failed to connect" deviceId:deviceId];
+    [self.deviceContexts removeObjectForKey:deviceId];
 }
 
-- (void)peripheral:(CBPeripheral *)peripheral didDiscoverServices:(NSError *)error {
-    for (CBService *s in peripheral.services) {
-        [peripheral discoverCharacteristics:nil forService:s];
+- (void)centralManager:(CBCentralManager *)central didDisconnectPeripheral:(CBPeripheral *)peripheral error:(NSError *)error {
+    NSString *deviceId = peripheral.identifier.UUIDString ?: @"";
+    BLEDeviceContext *context = [self contextForPeripheral:peripheral];
+    NSString *deviceType = @"Unknown";
+    if (context && context.config.deviceType.length > 0) {
+        deviceType = context.config.deviceType;
     }
-    [self sendUnityEvent:@{@"event":@"servicesDiscovered", @"id":peripheral.identifier.UUIDString}];
+    [self sendUnityEvent:@{
+        @"eventType": @"disconnected",
+        @"id": deviceId,
+        @"deviceType": deviceType
+    }];
+    [self.deviceContexts removeObjectForKey:deviceId];
+}
+
+#pragma mark - CBPeripheralDelegate
+
+- (void)peripheral:(CBPeripheral *)peripheral didDiscoverServices:(NSError *)error {
+    BLEDeviceContext *context = [self contextForPeripheral:peripheral];
+    if (!context) {
+        return;
+    }
+    if (error) {
+        [self sendUnityError:error.localizedDescription ?: @"service discovery failed" deviceId:peripheral.identifier.UUIDString];
+        return;
+    }
+
+    if (context.config.serviceUuid) {
+        BOOL found = NO;
+        for (CBService *service in peripheral.services) {
+            if ([service.UUID isEqual:context.config.serviceUuid]) {
+                found = YES;
+                [peripheral discoverCharacteristics:nil forService:service];
+            }
+        }
+        if (!found) {
+            [self sendUnityError:@"service not found" deviceId:peripheral.identifier.UUIDString];
+        }
+    } else {
+        for (CBService *service in peripheral.services) {
+            [peripheral discoverCharacteristics:nil forService:service];
+        }
+    }
 }
 
 - (void)peripheral:(CBPeripheral *)peripheral didDiscoverCharacteristicsForService:(CBService *)service error:(NSError *)error {
-    for (CBCharacteristic *c in service.characteristics) {
-        NSString *key = c.UUID.UUIDString;
-        _characteristics[c.UUID] = c;
-        // notify Unity about characteristic
-        [self sendUnityEvent:@{@"event":@"charFound",@"service":service.UUID.UUIDString, @"char":key}];
+    BLEDeviceContext *context = [self contextForPeripheral:peripheral];
+    if (!context) {
+        return;
+    }
+    if (error) {
+        [self sendUnityError:error.localizedDescription ?: @"characteristic discovery failed" deviceId:peripheral.identifier.UUIDString];
+        return;
+    }
+
+    for (CBCharacteristic *characteristic in service.characteristics) {
+        context.characteristics[characteristic.UUID] = characteristic;
+        if (context.config.controlCharacteristicUuid && [characteristic.UUID isEqual:context.config.controlCharacteristicUuid]) {
+            context.controlCharacteristic = characteristic;
+        }
+        if (context.config.dataCharacteristicUuid && [characteristic.UUID isEqual:context.config.dataCharacteristicUuid]) {
+            context.dataCharacteristic = characteristic;
+            [peripheral setNotifyValue:YES forCharacteristic:characteristic];
+        }
+    }
+
+    if (!context.config.dataCharacteristicUuid) {
+        for (CBCharacteristic *c in service.characteristics) {
+            if ((c.properties & CBCharacteristicPropertyNotify) == CBCharacteristicPropertyNotify) {
+                context.dataCharacteristic = c;
+                [peripheral setNotifyValue:YES forCharacteristic:c];
+                break;
+            }
+        }
+    }
+
+    [self emitReadyIfNeeded:context];
+}
+
+- (void)peripheral:(CBPeripheral *)peripheral didUpdateNotificationStateForCharacteristic:(CBCharacteristic *)characteristic error:(NSError *)error {
+    BLEDeviceContext *context = [self contextForPeripheral:peripheral];
+    if (!context) {
+        return;
+    }
+    if (error) {
+        [self sendUnityError:error.localizedDescription ?: @"notification update failed" deviceId:peripheral.identifier.UUIDString];
+        return;
+    }
+    if (characteristic.isNotifying && context.config.autoStartOnNotification && !context.autoStartScheduled) {
+        context.autoStartScheduled = YES;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(millisecondsToSeconds((int)context.config.notificationStartDelayMs) * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [self startMeasurement:peripheral.identifier.UUIDString ?: @""];
+        });
     }
 }
 
-- (void)readCharacteristicWithService:(NSString*)service charId:(NSString*)charId {
-    CBUUID *suuid = [CBUUID UUIDWithString:service];
-    CBUUID *cuuid = [CBUUID UUIDWithString:charId];
-    CBCharacteristic *c = _characteristics[cuuid];
-    if (c && _connectedPeripheral) [_connectedPeripheral readValueForCharacteristic:c];
+- (void)peripheral:(CBPeripheral *)peripheral didWriteValueForCharacteristic:(CBCharacteristic *)characteristic error:(NSError *)error {
+    BLEDeviceContext *context = [self contextForPeripheral:peripheral];
+    if (!context) {
+        return;
+    }
+    if (error) {
+        [self sendUnityError:error.localizedDescription ?: @"write failed" deviceId:peripheral.identifier.UUIDString];
+        return;
+    }
+    if (context.controlCharacteristic && [characteristic.UUID isEqual:context.controlCharacteristic.UUID]) {
+        [self sendUnityEvent:@{
+            @"eventType": @"controlWritten",
+            @"deviceType": context.config.deviceType ?: @"Unknown",
+            @"id": peripheral.identifier.UUIDString ?: @""
+        }];
+    }
 }
 
 - (void)peripheral:(CBPeripheral *)peripheral didUpdateValueForCharacteristic:(CBCharacteristic *)characteristic error:(NSError *)error {
-    NSData *d = characteristic.value ?: [NSData data];
-    NSString *b64 = [d base64EncodedStringWithOptions:0];
-    [self sendUnityEvent:@{@"event":@"charValue",@"char":characteristic.UUID.UUIDString, @"value":b64}];
-}
-
-- (void)writeCharacteristicWithService:(NSString*)service charId:(NSString*)charId data:(NSData*)data {
-    CBUUID *cuuid = [CBUUID UUIDWithString:charId];
-    CBCharacteristic *c = _characteristics[cuuid];
-    if (c && _connectedPeripheral) {
-        CBCharacteristicWriteType type = CBCharacteristicWriteWithResponse;
-        [_connectedPeripheral writeValue:data forCharacteristic:c type:type];
+    if (error) {
+        [self sendUnityError:error.localizedDescription ?: @"characteristic update failed" deviceId:peripheral.identifier.UUIDString];
+        return;
     }
-}
-
-// convenience: send JSON via UnitySendMessage
-- (void)sendUnityEvent:(NSDictionary*)obj {
-    NSError *err = nil;
-    NSData *d = [NSJSONSerialization dataWithJSONObject:obj options:0 error:&err];
-    if (!d) return;
-    NSString *jsonStr = [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding];
-    if (!_unityObjectName) return;
-    UnitySendMessage([_unityObjectName UTF8String], "OnNativeCallback", [jsonStr UTF8String]);
+    NSData *value = characteristic.value ?: [NSData data];
+    NSString *base64 = [value base64EncodedStringWithOptions:0];
+    [self sendUnityEvent:@{
+        @"eventType": @"data",
+        @"id": peripheral.identifier.UUIDString ?: @"",
+        @"uuid": characteristic.UUID.UUIDString ?: @"",
+        @"value": base64 ?: @""
+    }];
 }
 
 @end
