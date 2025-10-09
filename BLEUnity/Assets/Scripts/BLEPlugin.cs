@@ -25,6 +25,10 @@ public class BLEPlugin : MonoBehaviour
         {
             jc.CallStatic("RequestBlePermissions", gameObject.name, "OnPermissionResult");
         }
+#else
+        // iOS (and other platforms) do not require an explicit runtime Bluetooth permission.
+        // Mark the permission flow as completed so initialization can continue.
+        PermissionGranted = true;
 #endif
     }
 
