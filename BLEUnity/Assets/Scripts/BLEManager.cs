@@ -140,45 +140,46 @@ public class BLEManager : MonoBehaviour
             Debug.LogError($"[BLEManager] Failed to parse JSON: {ex}");
             return;
         }
-
-        if (!devices.ContainsKey(ev.id) && !string.IsNullOrEmpty(ev.id))
+        if (ev.eventType != "state")
         {
-            DeviceType detectedType = BleDeviceProfiles.DetectDeviceType(ev.deviceType, ev.name);
-            if (TrustedDeviceStore.TryGet(ev.id, out var record) && detectedType == DeviceType.Unknown)
-                detectedType = record.type;
-
-            devices[ev.id] = new BleDevice
+            if (!devices.ContainsKey(ev.id) && !string.IsNullOrEmpty(ev.id))
             {
-                id = ev.id,
-                name = ev.name,
-                type = detectedType,
-                isConnected = false,
-                rssi = ev.rssi,
-                isTrusted = TrustedDeviceStore.IsTrusted(ev.id),
-                connectionNote = string.Empty
-            };
-        }
+                DeviceType detectedType = BleDeviceProfiles.DetectDeviceType(ev.deviceType, ev.name);
+                if (TrustedDeviceStore.TryGet(ev.id, out var record) && detectedType == DeviceType.Unknown)
+                    detectedType = record.type;
 
-        if (devices.TryGetValue(ev.id, out var existingDevice))
-        {
-            if (!string.IsNullOrEmpty(ev.name)) existingDevice.name = ev.name;
-            var detectedType = BleDeviceProfiles.DetectDeviceType(ev.deviceType, ev.name ?? existingDevice.name);
-            if (detectedType == DeviceType.Unknown && TrustedDeviceStore.TryGet(ev.id, out var record))
-                detectedType = record.type;
-
-            if (detectedType != DeviceType.Unknown)
-            {
-                existingDevice.type = detectedType;
+                devices[ev.id] = new BleDevice
+                {
+                    id = ev.id,
+                    name = ev.name,
+                    type = detectedType,
+                    isConnected = false,
+                    rssi = ev.rssi,
+                    isTrusted = TrustedDeviceStore.IsTrusted(ev.id),
+                    connectionNote = string.Empty
+                };
             }
 
-            existingDevice.isTrusted = TrustedDeviceStore.IsTrusted(ev.id);
-
-            if (ev.eventType == "scanResult")
+            if (devices.TryGetValue(ev.id, out var existingDevice))
             {
-                existingDevice.rssi = ev.rssi;
+                if (!string.IsNullOrEmpty(ev.name)) existingDevice.name = ev.name;
+                var detectedType = BleDeviceProfiles.DetectDeviceType(ev.deviceType, ev.name ?? existingDevice.name);
+                if (detectedType == DeviceType.Unknown && TrustedDeviceStore.TryGet(ev.id, out var record))
+                    detectedType = record.type;
+
+                if (detectedType != DeviceType.Unknown)
+                {
+                    existingDevice.type = detectedType;
+                }
+
+                existingDevice.isTrusted = TrustedDeviceStore.IsTrusted(ev.id);
+
+                if (ev.eventType == "scanResult")
+                {
+                    existingDevice.rssi = ev.rssi;
+                }
             }
         }
-
 
         switch (ev.eventType)
         {
