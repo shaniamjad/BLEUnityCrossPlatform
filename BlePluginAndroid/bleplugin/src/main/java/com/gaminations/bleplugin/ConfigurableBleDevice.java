@@ -99,7 +99,7 @@ class ConfigurableBleDevice extends BleDeviceBase {
 
                 if (CLIENT_CHAR_CONFIG.equals(descriptor.getUuid()) && config.autoStartOnNotification && config.startCommand != null) {
                     Handler handler = new Handler(Looper.getMainLooper());
-                    handler.postDelayed(() -> startMeasurement(), Math.max(config.notificationStartDelayMs, 0));
+//                    handler.postDelayed(() -> startMeasurement(), Math.max(config.notificationStartDelayMs, 0));
                 }
             }
 
