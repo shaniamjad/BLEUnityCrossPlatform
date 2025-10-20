@@ -3,11 +3,8 @@ using System;
 /// <summary>
 /// Parses biopotential (EEG/EMG/SPD) BLE signal packets into structured data arrays.
 /// </summary>
-public class BiopotSignalParser
+public class BiopotSignalParser: IDataParser
 {
-    private static readonly int[,] EmptyDataSamples = new int[0, 0];
-    private static readonly short[] EmptyAccelerometerSamples = new short[0];
-    private static readonly int[] EmptyBioImpSamples = new int[0];
 
     private readonly BiopotGenericInfo _biopotParams;
     private readonly uint _expectedPacketSize;
@@ -28,7 +25,7 @@ public class BiopotSignalParser
     }
 
 
-    public bool TryParse(byte[] packet, out BiopotParsedData result)
+    public bool TryParse(byte[] packet, out IParsedData result)
     {
         result = null;
 

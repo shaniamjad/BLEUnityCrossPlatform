@@ -16,5 +16,8 @@ public interface IBLEDeviceListener
     void OnMeasurementStateChanged(BleDevice device, MeasurementState state);
 
     /// <summary>Called when new data arrives from the device.</summary>
-    void OnData(BleDevice device, byte[] rawData);
+    void OnData(BleDevice device, IParsedData parsedData);
+
+
+
 }

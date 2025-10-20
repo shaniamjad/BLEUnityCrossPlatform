@@ -22,9 +22,6 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
 
     private BleDevice device;
 
-    // Updated parsers using new model-returning signature
-    private MovellaSignalParser movellaParser;
-    private BiopotSignalParser biopotParser;
 
     private bool hasProfile;
 
@@ -39,20 +36,6 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
 
         hasProfile = BleDeviceProfiles.TryGetProfile(dev.type) != null;
         UpdateStatus(dev);
-
-        // Instantiate parsers
-        switch (dev.type)
-        {
-            case DeviceType.Movella:
-                movellaParser = new MovellaSignalParser();
-                break;
-
-            case DeviceType.BioPot:
-                biopotParser = new BiopotSignalParser(
-                    new BiopotGenericInfo { ChannelsNumber = 8, SamplesPerChannelNumber = 7 }
-                );
-                break;
-        }
 
         connectButton.onClick.RemoveAllListeners();
         disconnectButton.onClick.RemoveAllListeners();
@@ -149,48 +132,44 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
     public void OnReady(BleDevice dev) => device = dev;
     public void OnMeasurementStateChanged(BleDevice dev, MeasurementState state) => device = dev;
 
-    public void OnData(BleDevice dev, byte[] rawData)
+    public void OnData(BleDevice dev, IParsedData parsedData)
     {
-        if (rawData == null || rawData.Length == 0)
+        if (parsedData == null)
             return;
 
         switch (dev.type)
         {
             case DeviceType.Movella:
-                if (movellaParser != null && movellaParser.TryParse(rawData, out var movellaData))
-                {
-                    line1Text.text = $"<b>Quat:</b> {string.Join(", ", movellaData.Quaternion)}";
-                    line2Text.text = $"<b>Accel:</b> {string.Join(", ", movellaData.FreeAcceleration)}";
-                    line3Text.text = $"<b>Status:</b> {movellaData.Status} | ClipA:{movellaData.ClippingCountAccelerometer} ClipG:{movellaData.ClippingCountGyroscope}";
-                }
+                MovellaParsedData movellaData = (MovellaParsedData)parsedData;
+                line1Text.text = $"<b>Quat:</b> {string.Join(", ", movellaData.Quaternion)}";
+                line2Text.text = $"<b>Accel:</b> {string.Join(", ", movellaData.FreeAcceleration)}";
+                line3Text.text = $"<b>Status:</b> {movellaData.Status} | ClipA:{movellaData.ClippingCountAccelerometer} ClipG:{movellaData.ClippingCountGyroscope}";
                 break;
 
             case DeviceType.BioPot:
-                if (biopotParser != null && biopotParser.TryParse(rawData, out var bioData))
+                BiopotParsedData bioData = (BiopotParsedData)parsedData;
+                if (bioData.SpdData != null && bioData.SpdData.Length > 0)
                 {
-                    if (bioData.SpdData != null && bioData.SpdData.Length > 0)
-                    {
-                        string eegValues = "";
-                        for (int s = 0; s < Mathf.Min(bioData.SpdData.GetLength(1), 5); s++)
-                            eegValues += bioData.SpdData[0, s].ToString("F2") + ", ";
-                        line1Text.text = $"<b>EEG (Ch0):</b> {eegValues}";
-                    }
+                    string eegValues = "";
+                    for (int s = 0; s < Mathf.Min(bioData.SpdData.GetLength(1), 5); s++)
+                        eegValues += bioData.SpdData[0, s].ToString("F2") + ", ";
+                    line1Text.text = $"<b>EEG (Ch0):</b> {eegValues}";
+                }
 
-                    if (bioData.AccelerometerData != null && bioData.AccelerometerData.Length > 0)
-                    {
-                        string accValues = "";
-                        for (int i = 0; i < Mathf.Min(bioData.AccelerometerData.Length, 3); i++)
-                            accValues += bioData.AccelerometerData[i].ToString("F2") + ", ";
-                        line2Text.text = $"<b>Accel:</b> {accValues}";
-                    }
+                if (bioData.AccelerometerData != null && bioData.AccelerometerData.Length > 0)
+                {
+                    string accValues = "";
+                    for (int i = 0; i < Mathf.Min(bioData.AccelerometerData.Length, 3); i++)
+                        accValues += bioData.AccelerometerData[i].ToString("F2") + ", ";
+                    line2Text.text = $"<b>Accel:</b> {accValues}";
+                }
 
-                    if (bioData.BioImpedanceData != null && bioData.BioImpedanceData.Length > 0)
-                    {
-                        string bioValues = "";
-                        for (int i = 0; i < Mathf.Min(bioData.BioImpedanceData.Length, 3); i++)
-                            bioValues += bioData.BioImpedanceData[i].ToString("F2") + ", ";
-                        line3Text.text = $"<b>Bio:</b> {bioValues}";
-                    }
+                if (bioData.BioImpedanceData != null && bioData.BioImpedanceData.Length > 0)
+                {
+                    string bioValues = "";
+                    for (int i = 0; i < Mathf.Min(bioData.BioImpedanceData.Length, 3); i++)
+                        bioValues += bioData.BioImpedanceData[i].ToString("F2") + ", ";
+                    line3Text.text = $"<b>Bio:</b> {bioValues}";
                 }
                 break;
         }

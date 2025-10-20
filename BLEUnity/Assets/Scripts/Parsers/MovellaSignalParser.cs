@@ -1,7 +1,7 @@
 using System;
 using UnityEngine;
 
-public class MovellaSignalParser
+public class MovellaSignalParser: IDataParser
 {
     private readonly int expectedPacketSize;
 
@@ -10,7 +10,7 @@ public class MovellaSignalParser
         expectedPacketSize = GetExpectedPacketSize();
     }
 
-    public bool TryParse(byte[] packet, out MovellaParsedData result)
+    public bool TryParse(byte[] packet, out IParsedData result)
     {
         result = null;
 

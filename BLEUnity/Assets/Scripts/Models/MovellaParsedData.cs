@@ -1,4 +1,4 @@
-public class MovellaParsedData
+public class MovellaParsedData : IParsedData
 {
     public int Timestamp { get; set; }
     public float[] Quaternion { get; set; }

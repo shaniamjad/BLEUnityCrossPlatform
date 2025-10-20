@@ -18,6 +18,8 @@ public class BLEManager : MonoBehaviour
     private readonly Dictionary<string, BleDevice> devices = new();
     public IReadOnlyDictionary<string, BleDevice> Devices => devices;
 
+    private readonly Dictionary<DeviceType, IDataParser> dataParsers = new();
+
 
     private const float InitialScanDurationSeconds = 15f;
     private const float AutoConnectTimeoutSeconds = 15f;
@@ -59,6 +61,7 @@ public class BLEManager : MonoBehaviour
 
     private IEnumerator Start()
     {
+        SetupParsers();
 
         // 1. Request BLE permissions
         BLEPlugin.Instance.RequestPermissions();
@@ -75,6 +78,13 @@ public class BLEManager : MonoBehaviour
         if (initialScanCoroutine != null)
             StopCoroutine(initialScanCoroutine);
         initialScanCoroutine = StartCoroutine(RunInitialDiscoveryScan());
+    }
+
+    private void SetupParsers()
+    {
+        dataParsers[DeviceType.Movella] = new MovellaSignalParser();
+        dataParsers[DeviceType.BioPot] = new BiopotSignalParser(new BiopotGenericInfo { ChannelsNumber = 8, SamplesPerChannelNumber = 7 });
+
     }
 
     public void OnStartScanClicked()
@@ -289,16 +299,25 @@ public class BLEManager : MonoBehaviour
             return;
         }
 
-        // Notify listeners
-        device.NotifyData(raw);
 
         // Internal parser (optional)
         switch (device.type)
         {
 
             case DeviceType.Unknown:
-            default:
                 Debug.LogWarning($"[BLEManager] Unknown device type for {device.name}");
+                break;
+            default:
+
+                if (dataParsers[device.type].TryParse(raw, out IParsedData result))
+                {
+                    device.NotifyData(result);
+
+                }
+                else
+                {
+                    Debug.LogWarning($"[BLEManager] Unable to parse data {device.name}");
+                }
                 break;
         }
     }

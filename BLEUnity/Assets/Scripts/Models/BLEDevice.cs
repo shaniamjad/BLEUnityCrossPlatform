@@ -77,10 +77,10 @@ public class BleDevice
             l.OnReady(this);
     }
 
-    public void NotifyData(byte[] rawData)
+    public void NotifyData(IParsedData parsedData)
     {
         foreach (var l in listeners)
-            l.OnData(this, rawData);
+            l.OnData(this, parsedData);
     }
 
     public void NotifyMeasurementStateChanged(MeasurementState newState)
