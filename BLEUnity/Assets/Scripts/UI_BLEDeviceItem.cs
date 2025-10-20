@@ -28,18 +28,6 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
 
     private bool hasProfile;
 
-    private void OnEnable()
-    {
-        if (device != null)
-            BLEManager.Instance.AddListener(device.id, this);
-    }
-
-    private void OnDisable()
-    {
-        if (device != null)
-            BLEManager.Instance.RemoveListener(device.id, this);
-    }
-
     public void Setup(BleDevice dev)
     {
         device = dev;
@@ -91,7 +79,7 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
         pauseMeasurementButton?.onClick.AddListener(OnPauseMeasurementClicked);
         stopMeasurementButton?.onClick.AddListener(OnStopMeasurementClicked);
 
-        BLEManager.Instance.AddListener(dev.id, this);
+        device.AddListener(this);
     }
 
     private void OnStartMeasurementClicked()

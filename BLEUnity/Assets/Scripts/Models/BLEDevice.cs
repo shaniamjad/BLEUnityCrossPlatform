@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 
@@ -44,6 +45,49 @@ public class BleDevice
     public bool autoConnectFailed;
 
 
+    private readonly List<IBLEDeviceListener> listeners = new();
+
+    public void AddListener(IBLEDeviceListener listener)
+    {
+        if (listener != null && !listeners.Contains(listener))
+            listeners.Add(listener);
+    }
+
+    public void RemoveListener(IBLEDeviceListener listener)
+    {
+        listeners.Remove(listener);
+    }
+
+    // ✅ These will replace BLEManager's Notify methods:
+    public void NotifyConnected()
+    {
+        foreach (var l in listeners)
+            l.OnConnected(this);
+    }
+
+    public void NotifyDisconnected()
+    {
+        foreach (var l in listeners)
+            l.OnDisconnected(this);
+    }
+
+    public void NotifyReady()
+    {
+        foreach (var l in listeners)
+            l.OnReady(this);
+    }
+
+    public void NotifyData(byte[] rawData)
+    {
+        foreach (var l in listeners)
+            l.OnData(this, rawData);
+    }
+
+    public void NotifyMeasurementStateChanged(MeasurementState newState)
+    {
+        foreach (var l in listeners)
+            l.OnMeasurementStateChanged(this, newState);
+    }
 
 
     public void StartMeasurement()

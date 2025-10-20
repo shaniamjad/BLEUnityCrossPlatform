@@ -18,7 +18,6 @@ public class BLEManager : MonoBehaviour
     private readonly Dictionary<string, BleDevice> devices = new();
     public IReadOnlyDictionary<string, BleDevice> Devices => devices;
 
-    private readonly Dictionary<string, List<IBLEDeviceListener>> listeners = new();
 
     private const float InitialScanDurationSeconds = 15f;
     private const float AutoConnectTimeoutSeconds = 15f;
@@ -166,7 +165,7 @@ public class BLEManager : MonoBehaviour
                 if (devices.TryGetValue(ev.id, out var readyDevice))
                 {
                     readyDevice.isReady = true;
-                    NotifyReady(readyDevice);
+                    readyDevice.NotifyReady();
                     HandleDeviceReady(readyDevice);
                 }
                 break;
@@ -181,7 +180,7 @@ public class BLEManager : MonoBehaviour
                     connectedDevice.connectionNote = string.Empty;
                     connectedDevice.isReady = false;
                     SetMeasurementState(connectedDevice, MeasurementState.Idle);
-                    NotifyConnected(connectedDevice); // ✅ notify listeners
+                    connectedDevice.NotifyConnected();// ✅ notify listeners
                     TrustedDeviceStore.SetLastConnectionState(connectedDevice.id, connectedDevice.type, true);
                 }
                 break;
@@ -196,7 +195,7 @@ public class BLEManager : MonoBehaviour
                     if (!string.Equals(disconnectedDevice.connectionNote, "Auto-connect timed out", StringComparison.Ordinal))
                         disconnectedDevice.connectionNote = string.Empty;
                     SetMeasurementState(disconnectedDevice, MeasurementState.Idle);
-                    NotifyDisconnected(disconnectedDevice); // ✅ notify listeners
+                    disconnectedDevice.NotifyDisconnected();// ✅ notify listeners
                 }
                 break;
 
@@ -291,7 +290,7 @@ public class BLEManager : MonoBehaviour
         }
 
         // Notify listeners
-        NotifyData(device, raw);
+        device.NotifyData(raw);
 
         // Internal parser (optional)
         switch (device.type)
@@ -391,36 +390,6 @@ public class BLEManager : MonoBehaviour
     }
 
 
-    // ----------------------------------------------------------------------
-    // --- LISTENER REGISTRATION SYSTEM ------------------------------------
-    // ----------------------------------------------------------------------
-
-    /// <summary>Register a listener for a specific device ID.</summary>
-    public void AddListener(string deviceId, IBLEDeviceListener listener)
-    {
-        if (!listeners.TryGetValue(deviceId, out var list))
-        {
-            list = new List<IBLEDeviceListener>();
-            listeners[deviceId] = list;
-        }
-
-        if (!list.Contains(listener))
-        {
-            list.Add(listener);
-        }
-    }
-
-    /// <summary>Unregister a listener for a specific device ID.</summary>
-    public void RemoveListener(string deviceId, IBLEDeviceListener listener)
-    {
-        if (listeners.TryGetValue(deviceId, out var list))
-        {
-            list.Remove(listener);
-            if (list.Count == 0)
-                listeners.Remove(deviceId);
-        }
-    }
-
     private void SetMeasurementState(BleDevice device, MeasurementState newState)
     {
         if (device == null)
@@ -433,56 +402,9 @@ public class BLEManager : MonoBehaviour
             device.isReady = false;
 
         device.measurementState = newState;
-        NotifyMeasurementStateChanged(device, newState);
+        device.NotifyMeasurementStateChanged(newState);
     }
 
-    private void NotifyReady(BleDevice device)
-    {
-        if (listeners.TryGetValue(device.id, out var list))
-        {
-            foreach (var l in list)
-                l.OnReady(device);
-        }
-    }
-
-    /// <summary>Notify listeners that a device has connected.</summary>
-    private void NotifyConnected(BleDevice device)
-    {
-        if (listeners.TryGetValue(device.id, out var list))
-        {
-            foreach (var l in list)
-                l.OnConnected(device);
-        }
-    }
-
-    /// <summary>Notify listeners that a device has disconnected.</summary>
-    private void NotifyDisconnected(BleDevice device)
-    {
-        if (listeners.TryGetValue(device.id, out var list))
-        {
-            foreach (var l in list)
-                l.OnDisconnected(device);
-        }
-    }
-
-    /// <summary>Notify listeners that new data arrived.</summary>
-    private void NotifyData(BleDevice device, byte[] raw)
-    {
-        if (listeners.TryGetValue(device.id, out var list))
-        {
-            foreach (var l in list)
-                l.OnData(device, raw);
-        }
-    }
-
-    private void NotifyMeasurementStateChanged(BleDevice device, MeasurementState state)
-    {
-        if (listeners.TryGetValue(device.id, out var list))
-        {
-            foreach (var l in list)
-                l.OnMeasurementStateChanged(device, state);
-        }
-    }
 
     // ----------------------------------------------------------------------
     // --- PUBLIC BLE ACTIONS ----------------------------------------------
