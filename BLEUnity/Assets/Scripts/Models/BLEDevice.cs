@@ -43,6 +43,8 @@ public class BleDevice
     public string connectionNote;
     public MeasurementState measurementState = MeasurementState.Idle;
     public bool autoConnectFailed;
+    private IDataParser parser;
+
 
 
     private readonly List<IBLEDeviceListener> listeners = new();
@@ -57,6 +59,31 @@ public class BleDevice
     {
         listeners.Remove(listener);
     }
+
+
+    public void SetParser(IDataParser dataParser)
+    {
+        parser = dataParser;
+    }
+
+    public string GetDeviceDisplayName()
+    {
+        var profile = BleDeviceProfiles.TryGetProfile(type);
+        return profile.DisplayName;
+    }
+
+    public void HandleRawData(byte[] raw)
+    {
+        if (parser != null && parser.TryParse(raw, out IParsedData parsed))
+        {
+            NotifyData(parsed);
+        }
+        else
+        {
+            Debug.LogWarning($"[{name}] Failed to parse data.");
+        }
+    }
+
 
     // ✅ These will replace BLEManager's Notify methods:
     public void NotifyConnected()
@@ -129,6 +156,23 @@ public class BleDevice
         measurementState = MeasurementState.Paused;
     }
 
+    public void SetMeasurementState(MeasurementState newState)
+    {
+
+        if (measurementState == newState)
+            return;
+
+        if (newState == MeasurementState.Sampling || newState == MeasurementState.Paused)
+            isReady = false;
+
+        measurementState = newState;
+        NotifyMeasurementStateChanged(newState);
+    }
 
 
+    public void DisConnect()
+    {
+        TrustedDeviceStore.SetLastConnectionState(id, type, false);
+        BLEPlugin.Instance.Disconnect(id);
+    }
 }

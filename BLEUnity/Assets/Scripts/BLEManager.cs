@@ -11,14 +11,10 @@ using UnityEngine.UI;
 public class BLEManager : MonoBehaviour
 {
     public static BLEManager Instance { get; private set; }
-
-
-
     // All discovered or connected devices
     private readonly Dictionary<string, BleDevice> devices = new();
     public IReadOnlyDictionary<string, BleDevice> Devices => devices;
-
-    private readonly Dictionary<DeviceType, IDataParser> dataParsers = new();
+    private ParserFactory parsersFactory = new ParserFactory(new BiopotGenericInfo { ChannelsNumber = 8, SamplesPerChannelNumber = 7 });
 
 
     private const float InitialScanDurationSeconds = 15f;
@@ -38,13 +34,10 @@ public class BLEManager : MonoBehaviour
     public event Action<IEnumerable<BleDevice>> OnDevicesUpdated;
 
 
-    private void NotifyDevicesUpdated()
+    public void NotifyDevicesUpdated()
     {
         OnDevicesUpdated?.Invoke(devices.Values);
     }
-
-
-
 
     private void Awake()
     {
@@ -61,7 +54,6 @@ public class BLEManager : MonoBehaviour
 
     private IEnumerator Start()
     {
-        SetupParsers();
 
         // 1. Request BLE permissions
         BLEPlugin.Instance.RequestPermissions();
@@ -80,12 +72,7 @@ public class BLEManager : MonoBehaviour
         initialScanCoroutine = StartCoroutine(RunInitialDiscoveryScan());
     }
 
-    private void SetupParsers()
-    {
-        dataParsers[DeviceType.Movella] = new MovellaSignalParser();
-        dataParsers[DeviceType.BioPot] = new BiopotSignalParser(new BiopotGenericInfo { ChannelsNumber = 8, SamplesPerChannelNumber = 7 });
 
-    }
 
     public void OnStartScanClicked()
     {
@@ -189,7 +176,7 @@ public class BLEManager : MonoBehaviour
                     connectedDevice.autoConnectFailed = false;
                     connectedDevice.connectionNote = string.Empty;
                     connectedDevice.isReady = false;
-                    SetMeasurementState(connectedDevice, MeasurementState.Idle);
+                    connectedDevice.SetMeasurementState(MeasurementState.Idle);
                     connectedDevice.NotifyConnected();// ✅ notify listeners
                     TrustedDeviceStore.SetLastConnectionState(connectedDevice.id, connectedDevice.type, true);
                 }
@@ -204,7 +191,7 @@ public class BLEManager : MonoBehaviour
                     disconnectedDevice.isAutoConnecting = false;
                     if (!string.Equals(disconnectedDevice.connectionNote, "Auto-connect timed out", StringComparison.Ordinal))
                         disconnectedDevice.connectionNote = string.Empty;
-                    SetMeasurementState(disconnectedDevice, MeasurementState.Idle);
+                    disconnectedDevice.SetMeasurementState(MeasurementState.Idle);
                     disconnectedDevice.NotifyDisconnected();// ✅ notify listeners
                 }
                 break;
@@ -241,6 +228,9 @@ public class BLEManager : MonoBehaviour
                 isTrusted = TrustedDeviceStore.IsTrusted(ev.id),
                 connectionNote = string.Empty
             };
+
+
+            device.SetParser(parsersFactory.Create(device.type));
 
             devices[ev.id] = device;
         }
@@ -308,16 +298,7 @@ public class BLEManager : MonoBehaviour
                 Debug.LogWarning($"[BLEManager] Unknown device type for {device.name}");
                 break;
             default:
-
-                if (dataParsers[device.type].TryParse(raw, out IParsedData result))
-                {
-                    device.NotifyData(result);
-
-                }
-                else
-                {
-                    Debug.LogWarning($"[BLEManager] Unable to parse data {device.name}");
-                }
+                device.HandleRawData(raw);
                 break;
         }
     }
@@ -352,7 +333,7 @@ public class BLEManager : MonoBehaviour
         Connect(device.id, device.type, initiatedByAuto: true);
     }
 
-    private void ScheduleAutoConnectTimeout(string deviceId)
+    public void ScheduleAutoConnectTimeout(string deviceId)
     {
         if (autoConnectTimeouts.TryGetValue(deviceId, out var routine))
             StopCoroutine(routine);
@@ -375,7 +356,7 @@ public class BLEManager : MonoBehaviour
         autoConnectTimeouts.Remove(deviceId);
     }
 
-    private void CancelAutoConnectTimeout(string deviceId)
+    public void CancelAutoConnectTimeout(string deviceId)
     {
         if (autoConnectTimeouts.TryGetValue(deviceId, out var routine))
         {
@@ -409,20 +390,10 @@ public class BLEManager : MonoBehaviour
     }
 
 
-    private void SetMeasurementState(BleDevice device, MeasurementState newState)
-    {
-        if (device == null)
-            return;
 
-        if (device.measurementState == newState)
-            return;
 
-        if (newState == MeasurementState.Sampling || newState == MeasurementState.Paused)
-            device.isReady = false;
 
-        device.measurementState = newState;
-        device.NotifyMeasurementStateChanged(newState);
-    }
+
 
 
     // ----------------------------------------------------------------------
@@ -486,16 +457,32 @@ public class BLEManager : MonoBehaviour
         NotifyDevicesUpdated();
     }
 
-    public void DisConnect(string deviceId)
+
+
+    public List<BleDevice> GetIMUDevices()
     {
-        if (devices.TryGetValue(deviceId, out var device))
-            TrustedDeviceStore.SetLastConnectionState(deviceId, device.type, false);
-        else
-            TrustedDeviceStore.SetLastConnectionState(deviceId, DeviceType.Unknown, false);
-
-        BLEPlugin.Instance.Disconnect(deviceId);
+        List<BleDevice> imuDevices = new List<BleDevice>();
+        foreach (KeyValuePair<string, BleDevice> keyValuePairs in devices)
+        {
+            BleDevice device = keyValuePairs.Value;
+            if (device.type == DeviceType.Movella)
+            {
+                imuDevices.Add(device);
+            }
+        }
+        return (imuDevices);
     }
-
-    public void StopScan() =>
-        BLEPlugin.Instance.StopScan();
+    public List<BleDevice> GetEMGsDevices()
+    {
+        List<BleDevice> emgsDevices = new List<BleDevice>();
+        foreach (KeyValuePair<string, BleDevice> keyValuePairs in devices)
+        {
+            BleDevice device = keyValuePairs.Value;
+            if (device.type == DeviceType.BioPot)
+            {
+                emgsDevices.Add(device);
+            }
+        }
+        return (emgsDevices);
+    }
 }

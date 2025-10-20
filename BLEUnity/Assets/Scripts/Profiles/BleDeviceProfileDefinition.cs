@@ -14,6 +14,7 @@ public sealed class BleDeviceProfileDefinition
 
     public BleDeviceProfileDefinition(
         DeviceType type,
+        string displayName,
         Guid serviceUuid,
         Guid controlCharacteristicUuid,
         Guid dataCharacteristicUuid,
@@ -26,6 +27,7 @@ public sealed class BleDeviceProfileDefinition
         byte[] pauseCommand)
     {
         Type = type;
+        DisplayName = displayName;
         ServiceUuid = serviceUuid;
         ControlCharacteristicUuid = controlCharacteristicUuid;
         DataCharacteristicUuid = dataCharacteristicUuid;
@@ -39,6 +41,7 @@ public sealed class BleDeviceProfileDefinition
     }
 
     public DeviceType Type { get; }
+    public String DisplayName { get; }
     public Guid ServiceUuid { get; }
     public Guid ControlCharacteristicUuid { get; }
     public Guid DataCharacteristicUuid { get; }

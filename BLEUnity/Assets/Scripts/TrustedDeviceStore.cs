@@ -7,9 +7,9 @@ using UnityEngine;
 [Serializable]
 public class TrustedDeviceRecord
 {
-    public string id;
-    public DeviceType type;
-    public bool? lastConnected;
+    public string id { get; set; }
+    public DeviceType type { get; set; }
+    public bool? lastConnected { get; set; }
 }
 
 public static class TrustedDeviceStore
@@ -17,10 +17,9 @@ public static class TrustedDeviceStore
     private const string StorageKey = "BLE_TRUSTED_DEVICES";
     private static List<TrustedDeviceRecord> cache;
 
-    static TrustedDeviceStore()
-    {
-        Load();
-    }
+    private static List<TrustedDeviceRecord> Cache => cache ??= new List<TrustedDeviceRecord>();
+
+    static TrustedDeviceStore() => Load();
 
     private static void Load()
     {
@@ -37,19 +36,16 @@ public static class TrustedDeviceStore
         }
         catch (Exception ex)
         {
-            Debug.LogWarning($"[TrustedDeviceStore] Failed to deserialize trusted devices: {ex.Message}");
+            Debug.LogWarning($"[TrustedDeviceStore] Failed to deserialize: {ex.Message}");
             cache = new List<TrustedDeviceRecord>();
         }
     }
 
     private static void Save()
     {
-        if (cache == null)
-            cache = new List<TrustedDeviceRecord>();
-
         try
         {
-            string json = JsonConvert.SerializeObject(cache);
+            string json = JsonConvert.SerializeObject(Cache);
             PlayerPrefs.SetString(StorageKey, json);
             PlayerPrefs.Save();
         }
@@ -59,41 +55,27 @@ public static class TrustedDeviceStore
         }
     }
 
-    public static IReadOnlyList<TrustedDeviceRecord> GetAll()
-    {
-        return cache ?? (cache = new List<TrustedDeviceRecord>());
-    }
+    public static IReadOnlyList<TrustedDeviceRecord> GetAll() => Cache;
 
     public static bool IsTrusted(string id)
-    {
-        if (string.IsNullOrEmpty(id))
-            return false;
-
-        return cache != null && cache.Any(r => r.id == id);
-    }
+        => !string.IsNullOrEmpty(id) && Cache.Any(r => r.id == id);
 
     public static bool TryGet(string id, out TrustedDeviceRecord record)
     {
         record = null;
-        if (string.IsNullOrEmpty(id) || cache == null)
-            return false;
-
-        record = cache.FirstOrDefault(r => r.id == id);
+        if (string.IsNullOrEmpty(id)) return false;
+        record = Cache.FirstOrDefault(r => r.id == id);
         return record != null;
     }
 
     public static void AddOrUpdate(string id, DeviceType type)
     {
-        if (string.IsNullOrEmpty(id))
-            return;
+        if (string.IsNullOrEmpty(id)) return;
 
-        if (cache == null)
-            cache = new List<TrustedDeviceRecord>();
-
-        var existing = cache.FirstOrDefault(r => r.id == id);
+        var existing = Cache.FirstOrDefault(r => r.id == id);
         if (existing == null)
         {
-            cache.Add(new TrustedDeviceRecord
+            Cache.Add(new TrustedDeviceRecord
             {
                 id = id,
                 type = type,
@@ -111,26 +93,16 @@ public static class TrustedDeviceStore
     public static bool ShouldAutoReconnect(string id)
     {
         if (TryGet(id, out var record))
-        {
-            // Default to auto-reconnect unless the last known state was an
-            // intentional disconnect (false). Null indicates legacy data or an
-            // unknown state, so we continue to auto-reconnect for backward
-            // compatibility.
             return record.lastConnected != false;
-        }
 
         return false;
     }
 
     public static void SetLastConnectionState(string id, DeviceType type, bool connected)
     {
-        if (string.IsNullOrEmpty(id))
-            return;
+        if (string.IsNullOrEmpty(id)) return;
 
-        if (cache == null)
-            cache = new List<TrustedDeviceRecord>();
-
-        var record = cache.FirstOrDefault(r => r.id == id);
+        var record = Cache.FirstOrDefault(r => r.id == id);
         if (record == null)
         {
             record = new TrustedDeviceRecord
@@ -139,7 +111,7 @@ public static class TrustedDeviceStore
                 type = type,
                 lastConnected = connected
             };
-            cache.Add(record);
+            Cache.Add(record);
         }
         else
         {
@@ -150,3 +122,4 @@ public static class TrustedDeviceStore
         Save();
     }
 }
+

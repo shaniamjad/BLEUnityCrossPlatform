@@ -55,7 +55,7 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
 
         disconnectButton.onClick.AddListener(() =>
         {
-            BLEManager.Instance.DisConnect(dev.id);
+            dev.DisConnect();
         });
 
         startMeasurementButton?.onClick.AddListener(OnStartMeasurementClicked);
@@ -129,7 +129,7 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
         line3Text.text = string.Empty;
     }
 
-    public void OnReady(BleDevice dev) => device = dev;
+    public void OnReady(BleDevice dev) { }
     public void OnMeasurementStateChanged(BleDevice dev, MeasurementState state) => device = dev;
 
     public void OnData(BleDevice dev, IParsedData parsedData)

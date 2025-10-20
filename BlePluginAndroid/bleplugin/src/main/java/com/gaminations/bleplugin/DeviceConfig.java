@@ -9,6 +9,7 @@ import java.util.UUID;
 
 class DeviceConfig {
     final String deviceType;
+    final String displayName;
     final UUID serviceUuid;
     final UUID controlCharacteristicUuid;
     final UUID dataCharacteristicUuid;
@@ -22,6 +23,7 @@ class DeviceConfig {
 
     private DeviceConfig(
             String deviceType,
+            String displayName,
             UUID serviceUuid,
             UUID controlCharacteristicUuid,
             UUID dataCharacteristicUuid,
@@ -33,6 +35,7 @@ class DeviceConfig {
             boolean autoStartOnNotification,
             int notificationStartDelayMs) {
         this.deviceType = deviceType;
+        this.displayName = displayName;
         this.serviceUuid = serviceUuid;
         this.controlCharacteristicUuid = controlCharacteristicUuid;
         this.dataCharacteristicUuid = dataCharacteristicUuid;
@@ -49,6 +52,8 @@ class DeviceConfig {
         JSONObject obj = new JSONObject(json);
 
         String type = obj.optString("deviceType", "Unknown");
+        String displayName = obj.optString("displayName", "Unknown");
+
         UUID serviceUuid = parseUuid(obj, "serviceUuid");
         UUID controlUuid = parseUuid(obj, "controlCharacteristicUuid");
         UUID dataUuid = parseUuid(obj, "dataCharacteristicUuid");
@@ -60,7 +65,7 @@ class DeviceConfig {
         boolean autoStartOnNotification = obj.optBoolean("autoStartOnNotification", false);
         int notificationStartDelayMs = obj.optInt("notificationStartDelayMs", 0);
 
-        return new DeviceConfig(type, serviceUuid, controlUuid, dataUuid, requestMtu,
+        return new DeviceConfig(type, displayName, serviceUuid, controlUuid, dataUuid, requestMtu,
                 startCommand, stopCommand, pauseCommand, emitReadyEvent,
                 autoStartOnNotification, notificationStartDelayMs);
     }

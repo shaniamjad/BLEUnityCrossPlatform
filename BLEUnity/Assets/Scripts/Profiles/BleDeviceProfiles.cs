@@ -13,6 +13,7 @@ public static class BleDeviceProfiles
             DeviceType.BioPot,
             new BleDeviceProfileDefinition(
                 DeviceType.BioPot,
+                "EMGs",
                 new Guid("0000fff0-0000-1000-8000-00805f9b34fb"),
                 new Guid("0000fff2-0000-1000-8000-00805f9b34fb"),
                 new Guid("0000fff4-0000-1000-8000-00805f9b34fb"),
@@ -28,6 +29,7 @@ public static class BleDeviceProfiles
             DeviceType.Movella,
             new BleDeviceProfileDefinition(
                 DeviceType.Movella,
+                "IMU",
                 new Guid("15172000-4947-11e9-8646-d663bd873d93"),
                 new Guid("15172001-4947-11e9-8646-d663bd873d93"),
                 new Guid("15172003-4947-11e9-8646-d663bd873d93"),
