@@ -42,4 +42,49 @@ public class BleDevice
     public string connectionNote;
     public MeasurementState measurementState = MeasurementState.Idle;
     public bool autoConnectFailed;
+
+
+
+
+    public void StartMeasurement()
+    {
+        if (!isConnected || measurementState == MeasurementState.Sampling)
+            return;
+
+        var profile = BleDeviceProfiles.TryGetProfile(type);
+        if (profile?.StartCommand == null)
+            return;
+
+        BLEPlugin.Instance.SendControl(id, profile.StartCommand, "start");
+        measurementState = MeasurementState.Sampling;
+    }
+
+    public void StopMeasurement()
+    {
+        if (!isConnected || measurementState == MeasurementState.Idle)
+            return;
+
+        var profile = BleDeviceProfiles.TryGetProfile(type);
+        if (profile?.StopCommand == null)
+            return;
+
+        BLEPlugin.Instance.SendControl(id, profile.StopCommand, "stop");
+        measurementState = MeasurementState.Idle;
+    }
+
+    public void PauseMeasurement()
+    {
+        if (!isConnected || measurementState != MeasurementState.Sampling)
+            return;
+
+        var profile = BleDeviceProfiles.TryGetProfile(type);
+        if (profile?.PauseCommand == null)
+            return;
+
+        BLEPlugin.Instance.SendControl(id, profile.PauseCommand, "pause");
+        measurementState = MeasurementState.Paused;
+    }
+
+
+
 }

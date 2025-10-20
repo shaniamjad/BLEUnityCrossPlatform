@@ -12,8 +12,6 @@ public class BLEManager : MonoBehaviour
 {
     public static BLEManager Instance { get; private set; }
 
-    [SerializeField] private Button startScan;
-    [SerializeField] private Button stopScan;
 
 
     // All discovered or connected devices
@@ -35,6 +33,18 @@ public class BLEManager : MonoBehaviour
 #endif
     private readonly Dictionary<string, Coroutine> autoConnectTimeouts = new();
 
+
+    public event Action<IEnumerable<BleDevice>> OnDevicesUpdated;
+
+
+    private void NotifyDevicesUpdated()
+    {
+        OnDevicesUpdated?.Invoke(devices.Values);
+    }
+
+
+
+
     private void Awake()
     {
         if (Instance == null)
@@ -50,8 +60,6 @@ public class BLEManager : MonoBehaviour
 
     private IEnumerator Start()
     {
-        startScan.onClick.AddListener(OnStartScanClicked);
-        stopScan.onClick.AddListener(OnStopScanClicked);
 
         // 1. Request BLE permissions
         BLEPlugin.Instance.RequestPermissions();
@@ -70,7 +78,7 @@ public class BLEManager : MonoBehaviour
         initialScanCoroutine = StartCoroutine(RunInitialDiscoveryScan());
     }
 
-    private void OnStartScanClicked()
+    public void OnStartScanClicked()
     {
         if (initialAutoScanActive)
             userExtendedInitialScan = true;
@@ -82,7 +90,7 @@ public class BLEManager : MonoBehaviour
         }
     }
 
-    private void OnStopScanClicked()
+    public void OnStopScanClicked()
     {
         BLEPlugin.Instance.StopScan();
         if (initialAutoScanActive)
@@ -140,46 +148,6 @@ public class BLEManager : MonoBehaviour
             Debug.LogError($"[BLEManager] Failed to parse JSON: {ex}");
             return;
         }
-        if (ev.eventType != "state")
-        {
-            if (!devices.ContainsKey(ev.id) && !string.IsNullOrEmpty(ev.id))
-            {
-                DeviceType detectedType = BleDeviceProfiles.DetectDeviceType(ev.deviceType, ev.name);
-                if (TrustedDeviceStore.TryGet(ev.id, out var record) && detectedType == DeviceType.Unknown)
-                    detectedType = record.type;
-
-                devices[ev.id] = new BleDevice
-                {
-                    id = ev.id,
-                    name = ev.name,
-                    type = detectedType,
-                    isConnected = false,
-                    rssi = ev.rssi,
-                    isTrusted = TrustedDeviceStore.IsTrusted(ev.id),
-                    connectionNote = string.Empty
-                };
-            }
-
-            if (devices.TryGetValue(ev.id, out var existingDevice))
-            {
-                if (!string.IsNullOrEmpty(ev.name)) existingDevice.name = ev.name;
-                var detectedType = BleDeviceProfiles.DetectDeviceType(ev.deviceType, ev.name ?? existingDevice.name);
-                if (detectedType == DeviceType.Unknown && TrustedDeviceStore.TryGet(ev.id, out var record))
-                    detectedType = record.type;
-
-                if (detectedType != DeviceType.Unknown)
-                {
-                    existingDevice.type = detectedType;
-                }
-
-                existingDevice.isTrusted = TrustedDeviceStore.IsTrusted(ev.id);
-
-                if (ev.eventType == "scanResult")
-                {
-                    existingDevice.rssi = ev.rssi;
-                }
-            }
-        }
 
         switch (ev.eventType)
         {
@@ -187,6 +155,7 @@ public class BLEManager : MonoBehaviour
                 HandleBluetoothStateEvent(ev);
                 break;
             case "scanResult":
+                AddOrUpdateDevice(ev);
                 if (devices.TryGetValue(ev.id, out var scannedDevice))
                 {
                     HandleScanResult(scannedDevice);
@@ -239,9 +208,51 @@ public class BLEManager : MonoBehaviour
                 break;
         }
 
-        if (UI_BLEDeviceList.Instance != null)
-            UI_BLEDeviceList.Instance.Refresh(devices.Values);
+        NotifyDevicesUpdated();
     }
+
+
+    private void AddOrUpdateDevice(BleEvent ev)
+    {
+        if (string.IsNullOrEmpty(ev.id)) return;
+
+        if (!devices.TryGetValue(ev.id, out var device))
+        {
+            DeviceType detectedType = BleDeviceProfiles.DetectDeviceType(ev.deviceType, ev.name);
+            if (TrustedDeviceStore.TryGet(ev.id, out var record) && detectedType == DeviceType.Unknown)
+                detectedType = record.type;
+
+            device = new BleDevice
+            {
+                id = ev.id,
+                name = ev.name,
+                type = detectedType,
+                isConnected = false,
+                rssi = ev.rssi,
+                isTrusted = TrustedDeviceStore.IsTrusted(ev.id),
+                connectionNote = string.Empty
+            };
+
+            devices[ev.id] = device;
+        }
+        else
+        {
+            if (!string.IsNullOrEmpty(ev.name)) device.name = ev.name;
+            var detectedType = BleDeviceProfiles.DetectDeviceType(ev.deviceType, ev.name ?? device.name);
+
+            if (detectedType == DeviceType.Unknown && TrustedDeviceStore.TryGet(ev.id, out var record))
+                detectedType = record.type;
+
+            if (detectedType != DeviceType.Unknown)
+                device.type = detectedType;
+
+            device.isTrusted = TrustedDeviceStore.IsTrusted(ev.id);
+
+            if (ev.eventType == "scanResult")
+                device.rssi = ev.rssi;
+        }
+    }
+
 
     private void HandleBluetoothStateEvent(BleEvent ev)
     {
@@ -340,8 +351,7 @@ public class BLEManager : MonoBehaviour
             device.isAutoConnecting = false;
             device.autoConnectFailed = true;
             device.connectionNote = "Auto-connect timed out";
-            if (UI_BLEDeviceList.Instance != null)
-                UI_BLEDeviceList.Instance.Refresh(devices.Values);
+            NotifyDevicesUpdated();
         }
 
         autoConnectTimeouts.Remove(deviceId);
@@ -374,7 +384,10 @@ public class BLEManager : MonoBehaviour
         if (delaySeconds > 0f)
             yield return new WaitForSeconds(delaySeconds);
 
-        StartMeasurement(deviceId);
+        if (BLEManager.Instance.Devices.TryGetValue(deviceId, out var device))
+        {
+            device.StartMeasurement();
+        }
     }
 
 
@@ -501,7 +514,7 @@ public class BLEManager : MonoBehaviour
             Debug.LogWarning($"[BLEManager] No device profile registered for {type}. Unable to connect to {deviceId}.");
             device.isAutoConnecting = false;
             device.connectionNote = "Profile unavailable";
-            UI_BLEDeviceList.Instance.Refresh(devices.Values);
+            NotifyDevicesUpdated();
             return;
         }
 
@@ -509,7 +522,7 @@ public class BLEManager : MonoBehaviour
         {
             device.connectionNote = "BLE plugin unavailable";
             device.isAutoConnecting = false;
-            UI_BLEDeviceList.Instance.Refresh(devices.Values);
+            NotifyDevicesUpdated();
             return;
         }
 
@@ -529,8 +542,7 @@ public class BLEManager : MonoBehaviour
         }
 
         BLEPlugin.Instance.Connect(deviceId, profile);
-        if (UI_BLEDeviceList.Instance != null)
-            UI_BLEDeviceList.Instance.Refresh(devices.Values);
+        NotifyDevicesUpdated();
     }
 
     public void DisConnect(string deviceId)
@@ -545,52 +557,4 @@ public class BLEManager : MonoBehaviour
 
     public void StopScan() =>
         BLEPlugin.Instance.StopScan();
-
-    public void StartMeasurement(string deviceId)
-    {
-        if (!devices.TryGetValue(deviceId, out var device))
-            return;
-
-        if (!device.isConnected || device.measurementState == MeasurementState.Sampling)
-            return;
-
-        var profile = BleDeviceProfiles.TryGetProfile(device.type);
-        if (profile?.StartCommand == null)
-            return;
-
-        BLEPlugin.Instance.SendControl(deviceId, profile.StartCommand, "start");
-        SetMeasurementState(device, MeasurementState.Sampling);
-    }
-
-    public void StopMeasurement(string deviceId)
-    {
-        if (!devices.TryGetValue(deviceId, out var device))
-            return;
-
-        if (!device.isConnected || device.measurementState == MeasurementState.Idle)
-            return;
-
-        var profile = BleDeviceProfiles.TryGetProfile(device.type);
-        if (profile?.StopCommand == null)
-            return;
-
-        BLEPlugin.Instance.SendControl(deviceId, profile.StopCommand, "stop");
-        SetMeasurementState(device, MeasurementState.Idle);
-    }
-
-    public void PauseMeasurement(string deviceId)
-    {
-        if (!devices.TryGetValue(deviceId, out var device))
-            return;
-
-        if (!device.isConnected || device.measurementState != MeasurementState.Sampling)
-            return;
-
-        var profile = BleDeviceProfiles.TryGetProfile(device.type);
-        if (profile?.PauseCommand == null)
-            return;
-
-        BLEPlugin.Instance.SendControl(deviceId, profile.PauseCommand, "pause");
-        SetMeasurementState(device, MeasurementState.Paused);
-    }
 }

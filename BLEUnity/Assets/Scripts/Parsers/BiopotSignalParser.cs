@@ -27,28 +27,22 @@ public class BiopotSignalParser
         }
     }
 
-    public int Timestamp { get; private set; }
-    public int[,] SpdData { get; private set; } = EmptyDataSamples;
-    public int[] BioImpedanceData { get; private set; } = EmptyBioImpSamples;
-    public short[] AccelerometerData { get; private set; } = EmptyAccelerometerSamples;
 
-    /// <summary>
-    /// Parses a BLE packet according to BiopotGenericInfo configuration.
-    /// </summary>
-    public bool TryParse(byte[] packet)
+    public bool TryParse(byte[] packet, out BiopotParsedData result)
     {
-        ResetData();
+        result = null;
 
         if (packet == null || packet.Length < _expectedPacketSize)
             return false;
 
+        var parsed = new BiopotParsedData();
         int offset = 0;
 
         // Timestamp
-        Timestamp = BitConverter.ToInt32(packet, offset);
+        parsed.Timestamp = BitConverter.ToInt32(packet, offset);
         offset += 4;
 
-        // SPD/EEG/EMG data
+        // SPD
         int[,] spd = new int[_biopotParams.ChannelsNumber, _biopotParams.SamplesPerChannelNumber];
 
         if (BLEConstants.biopotBits == 16)
@@ -67,7 +61,7 @@ public class BiopotSignalParser
                 offset += 2;
             }
         }
-        else // 24-bit or 22-bit support
+        else
         {
             for (int i = 0; i < _biopotParams.SamplesPerChannelNumber * _biopotParams.ChannelsNumber; i++)
             {
@@ -84,10 +78,10 @@ public class BiopotSignalParser
             }
         }
 
-        SpdData = spd;
+        parsed.SpdData = spd;
         FinalizeSignalTest();
 
-        // Accelerometer data
+        // Accelerometer
         if (_biopotParams.IsAccelerometerPresent)
         {
             int accelSamples = (int)(_biopotParams.SamplesPerChannelNumber / 2 * _biopotParams.AccelerometerChannelNumber);
@@ -97,30 +91,40 @@ public class BiopotSignalParser
                 accel[i] = (short)(packet[offset] | (packet[offset + 1] << 8));
                 offset += 2;
             }
-            AccelerometerData = accel;
+            parsed.AccelerometerData = accel;
+        }
+        else
+        {
+            parsed.AccelerometerData = Array.Empty<short>();
         }
 
-        // Bio-impedance data
+        // Bio-impedance
         if (_biopotParams.IsBioImpedancePresent)
         {
             int biCount = (int)(_biopotParams.SamplesPerChannelNumber * 2 * _biopotParams.BioImpedanceChannelNumber);
             int[] bioImp = new int[biCount];
-            const double bitResolution = 1.2 / 2097152.0; // (2^21)
+            const double bitResolution = 1.2 / 2097152.0;
 
             for (int i = 0; i < biCount; i++)
             {
                 byte signExtend = (packet[offset] & 0x80) != 0 ? (byte)0xFF : (byte)0x00;
                 int sample = (packet[offset + 2]) | (packet[offset + 1] << 8) | (packet[offset] << 16) | (signExtend << 24);
                 float voltage = (float)(-sample * bitResolution);
-                bioImp[i] = (int)(voltage * 1_000_000); // Convert V → µV
+                bioImp[i] = (int)(voltage * 1_000_000);
                 offset += 3;
             }
 
-            BioImpedanceData = bioImp;
+            parsed.BioImpedanceData = bioImp;
+        }
+        else
+        {
+            parsed.BioImpedanceData = Array.Empty<int>();
         }
 
+        result = parsed;
         return true;
     }
+
 
     private void UpdateTestRange(long channelId, int sample)
     {
@@ -160,10 +164,6 @@ public class BiopotSignalParser
 
     private void ResetData()
     {
-        Timestamp = 0;
-        SpdData = EmptyDataSamples;
-        BioImpedanceData = EmptyBioImpSamples;
-        AccelerometerData = EmptyAccelerometerSamples;
     }
 
     private uint GetExpectedPacketSize(BiopotGenericInfo info)

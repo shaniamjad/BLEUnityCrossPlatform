@@ -2,10 +2,6 @@ using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 
-/// <summary>
-/// UI representation of a single BLE device.
-/// Displays live parsed data and connection state.
-/// </summary>
 public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
 {
     [Header("UI Elements")]
@@ -15,9 +11,9 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
     [SerializeField] private Button disconnectButton;
 
     [Header("Data Output")]
-    [SerializeField] private TMP_Text line1Text; // For main parsed data (EEG/Quaternion)
-    [SerializeField] private TMP_Text line2Text; // For secondary data (Accel, etc.)
-    [SerializeField] private TMP_Text line3Text; // For debug or misc info
+    [SerializeField] private TMP_Text line1Text;
+    [SerializeField] private TMP_Text line2Text;
+    [SerializeField] private TMP_Text line3Text;
 
     [Header("Measurement Controls")]
     [SerializeField] private Button startMeasurementButton;
@@ -26,13 +22,12 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
 
     private BleDevice device;
 
-    // Device-specific parsers
+    // Updated parsers using new model-returning signature
     private MovellaSignalParser movellaParser;
     private BiopotSignalParser biopotParser;
 
     private bool hasProfile;
 
-    #region Unity Lifecycle
     private void OnEnable()
     {
         if (device != null)
@@ -44,11 +39,7 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
         if (device != null)
             BLEManager.Instance.RemoveListener(device.id, this);
     }
-    #endregion
 
-    /// <summary>
-    /// Setup UI for a specific BLE device entry.
-    /// </summary>
     public void Setup(BleDevice dev)
     {
         device = dev;
@@ -57,36 +48,36 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
         line1Text.text = string.Empty;
         line2Text.text = string.Empty;
         line3Text.text = string.Empty;
+
         hasProfile = BleDeviceProfiles.TryGetProfile(dev.type) != null;
         UpdateStatus(dev);
 
-        // Initialize parser based on device type
+        // Instantiate parsers
         switch (dev.type)
         {
             case DeviceType.Movella:
                 movellaParser = new MovellaSignalParser();
                 break;
+
             case DeviceType.BioPot:
                 biopotParser = new BiopotSignalParser(
-                    new BiopotGenericInfo { ChannelsNumber = 8, SamplesPerChannelNumber = 7 });
+                    new BiopotGenericInfo { ChannelsNumber = 8, SamplesPerChannelNumber = 7 }
+                );
                 break;
         }
 
         connectButton.onClick.RemoveAllListeners();
         disconnectButton.onClick.RemoveAllListeners();
-        if (startMeasurementButton != null) startMeasurementButton.onClick.RemoveAllListeners();
-        if (pauseMeasurementButton != null) pauseMeasurementButton.onClick.RemoveAllListeners();
-        if (stopMeasurementButton != null) stopMeasurementButton.onClick.RemoveAllListeners();
+        startMeasurementButton?.onClick.RemoveAllListeners();
+        pauseMeasurementButton?.onClick.RemoveAllListeners();
+        stopMeasurementButton?.onClick.RemoveAllListeners();
 
         connectButton.onClick.AddListener(() =>
         {
-            if (device == null)
-                return;
+            if (device == null) return;
 
             if (hasProfile)
-            {
                 TrustedDeviceStore.AddOrUpdate(device.id, device.type);
-            }
 
             BLEManager.Instance.Connect(device.id, device.type);
         });
@@ -96,12 +87,9 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
             BLEManager.Instance.DisConnect(dev.id);
         });
 
-        if (startMeasurementButton != null)
-            startMeasurementButton.onClick.AddListener(OnStartMeasurementClicked);
-        if (pauseMeasurementButton != null)
-            pauseMeasurementButton.onClick.AddListener(OnPauseMeasurementClicked);
-        if (stopMeasurementButton != null)
-            stopMeasurementButton.onClick.AddListener(OnStopMeasurementClicked);
+        startMeasurementButton?.onClick.AddListener(OnStartMeasurementClicked);
+        pauseMeasurementButton?.onClick.AddListener(OnPauseMeasurementClicked);
+        stopMeasurementButton?.onClick.AddListener(OnStopMeasurementClicked);
 
         BLEManager.Instance.AddListener(dev.id, this);
     }
@@ -110,67 +98,52 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
     {
         if (device == null || device.measurementState == MeasurementState.Sampling)
             return;
-
-        BLEManager.Instance.StartMeasurement(device.id);
+        device.StartMeasurement();
     }
 
     private void OnPauseMeasurementClicked()
     {
         if (device == null || device.measurementState != MeasurementState.Sampling)
             return;
-
-        BLEManager.Instance.PauseMeasurement(device.id);
+        device.PauseMeasurement();
     }
 
     private void OnStopMeasurementClicked()
     {
         if (device == null || device.measurementState == MeasurementState.Idle)
             return;
-
-        BLEManager.Instance.StopMeasurement(device.id);
+        device.StopMeasurement();
     }
 
-    /// <summary>
-    /// Update the button states and status label.
-    /// </summary>
     public void UpdateStatus(BleDevice dev)
     {
         device = dev;
         hasProfile = BleDeviceProfiles.TryGetProfile(dev.type) != null;
         bool connected = dev.isConnected;
-
         string rssiText = dev.rssi != 0 ? $" (RSSI {dev.rssi})" : string.Empty;
+
         if (connected)
-        {
             statusText.text = "<color=green>Connected</color>";
-        }
         else if (dev.isAutoConnecting)
-        {
             statusText.text = $"<color=yellow>Auto-connecting...</color>{rssiText}";
-        }
         else
-        {
             statusText.text = $"<color=red>Disconnected</color>{rssiText}";
-        }
 
         if (!string.IsNullOrEmpty(dev.connectionNote))
-        {
             statusText.text += $"\n<color=#cccccc>{dev.connectionNote}</color>";
-        }
 
         connectButton.gameObject.SetActive(!connected);
         disconnectButton.gameObject.SetActive(connected);
         connectButton.interactable = hasProfile && !dev.isAutoConnecting;
-
     }
 
-    #region IBLEDeviceListener Implementation
-
+    // ─────────────────────────────────────────────
+    // IBLEDeviceListener Implementation
+    // ─────────────────────────────────────────────
     public void OnConnected(BleDevice dev)
     {
         Debug.Log($"[UI_BLEDeviceItem] {dev.name} connected");
         UpdateStatus(dev);
-        
         line1Text.text = "Waiting for data...";
         line2Text.text = string.Empty;
         line3Text.text = string.Empty;
@@ -185,15 +158,8 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
         line3Text.text = string.Empty;
     }
 
-    public void OnReady(BleDevice dev)
-    {
-        device = dev;
-    }
-
-    public void OnMeasurementStateChanged(BleDevice dev, MeasurementState state)
-    {
-        device = dev;
-    }
+    public void OnReady(BleDevice dev) => device = dev;
+    public void OnMeasurementStateChanged(BleDevice dev, MeasurementState state) => device = dev;
 
     public void OnData(BleDevice dev, byte[] rawData)
     {
@@ -203,50 +169,42 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
         switch (dev.type)
         {
             case DeviceType.Movella:
-                if (movellaParser != null && movellaParser.TryParse(rawData))
+                if (movellaParser != null && movellaParser.TryParse(rawData, out var movellaData))
                 {
-                    // Display parsed Movella sensor data
-                    line1Text.text = $"<b>Quat:</b> {string.Join(", ", movellaParser.Quaternion)}";
-                    line2Text.text = $"<b>Accel:</b> {string.Join(", ", movellaParser.FreeAcceleration)}";
-                    line3Text.text = $"<b>Status:</b> {movellaParser.Status} | ClipA:{movellaParser.ClippingCountAccelerometer} ClipG:{movellaParser.ClippingCountGyroscope}";
+                    line1Text.text = $"<b>Quat:</b> {string.Join(", ", movellaData.Quaternion)}";
+                    line2Text.text = $"<b>Accel:</b> {string.Join(", ", movellaData.FreeAcceleration)}";
+                    line3Text.text = $"<b>Status:</b> {movellaData.Status} | ClipA:{movellaData.ClippingCountAccelerometer} ClipG:{movellaData.ClippingCountGyroscope}";
                 }
                 break;
 
             case DeviceType.BioPot:
-                if (biopotParser != null && biopotParser.TryParse(rawData))
+                if (biopotParser != null && biopotParser.TryParse(rawData, out var bioData))
                 {
-                    var eeg = biopotParser.SpdData;
-                    var acc = biopotParser.AccelerometerData;
-                    var bio = biopotParser.BioImpedanceData;
-
-                    if (eeg != null && eeg.Length > 0)
+                    if (bioData.SpdData != null && bioData.SpdData.Length > 0)
                     {
                         string eegValues = "";
-                        for (int s = 0; s < Mathf.Min(eeg.GetLength(1), 5); s++)
-                            eegValues += eeg[0, s].ToString("F2") + ", ";
+                        for (int s = 0; s < Mathf.Min(bioData.SpdData.GetLength(1), 5); s++)
+                            eegValues += bioData.SpdData[0, s].ToString("F2") + ", ";
                         line1Text.text = $"<b>EEG (Ch0):</b> {eegValues}";
                     }
 
-                    if (acc != null && acc.Length > 0)
+                    if (bioData.AccelerometerData != null && bioData.AccelerometerData.Length > 0)
                     {
                         string accValues = "";
-                        for (int i = 0; i < Mathf.Min(acc.Length, 3); i++)
-                            accValues += acc[i].ToString("F2") + ", ";
+                        for (int i = 0; i < Mathf.Min(bioData.AccelerometerData.Length, 3); i++)
+                            accValues += bioData.AccelerometerData[i].ToString("F2") + ", ";
                         line2Text.text = $"<b>Accel:</b> {accValues}";
                     }
 
-                    if (bio != null && bio.Length > 0)
+                    if (bioData.BioImpedanceData != null && bioData.BioImpedanceData.Length > 0)
                     {
                         string bioValues = "";
-                        for (int i = 0; i < Mathf.Min(bio.Length, 3); i++)
-                            bioValues += bio[i].ToString("F2") + ", ";
+                        for (int i = 0; i < Mathf.Min(bioData.BioImpedanceData.Length, 3); i++)
+                            bioValues += bioData.BioImpedanceData[i].ToString("F2") + ", ";
                         line3Text.text = $"<b>Bio:</b> {bioValues}";
                     }
                 }
                 break;
         }
-
     }
-
-    #endregion
 }

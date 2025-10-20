@@ -47,4 +47,26 @@ public class UI_BLEDeviceList : MonoBehaviour
             }
         }
     }
+
+
+
+
+    private void OnEnable()
+    {
+        if (BLEManager.Instance != null)
+            BLEManager.Instance.OnDevicesUpdated += HandleDevicesUpdated;
+    }
+
+    private void OnDisable()
+    {
+        if (BLEManager.Instance != null)
+            BLEManager.Instance.OnDevicesUpdated -= HandleDevicesUpdated;
+    }
+
+    private void HandleDevicesUpdated(IEnumerable<BleDevice> updatedDevices)
+    {
+        Refresh(updatedDevices);
+    }
+
+
 }
