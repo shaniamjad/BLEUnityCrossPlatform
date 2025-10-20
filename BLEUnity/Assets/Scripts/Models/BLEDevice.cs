@@ -170,6 +170,44 @@ public class BleDevice
     }
 
 
+    public void Connect(bool initiatedByAuto = false)
+    {
+        var profile = BleDeviceProfiles.TryGetProfile(type);
+        if (profile == null)
+        {
+            connectionNote = "Profile unavailable";
+            isAutoConnecting = false;
+            BLEManager.Instance.NotifyDevicesUpdated();
+            return;
+        }
+
+        if (BLEPlugin.Instance == null)
+        {
+            connectionNote = "BLE plugin unavailable";
+            isAutoConnecting = false;
+            BLEManager.Instance.NotifyDevicesUpdated();
+            return;
+        }
+
+        isAutoConnecting = initiatedByAuto;
+
+        if (initiatedByAuto)
+        {
+            autoConnectFailed = false;
+            connectionNote = "Auto-connecting...";
+            BLEManager.Instance.ScheduleAutoConnectTimeout(id);
+        }
+        else
+        {
+            autoConnectFailed = true;
+            BLEManager.Instance.CancelAutoConnectTimeout(id);
+            connectionNote = "Connecting...";
+        }
+
+        BLEPlugin.Instance.Connect(id, profile);
+        BLEManager.Instance.NotifyDevicesUpdated();
+    }
+
     public void DisConnect()
     {
         TrustedDeviceStore.SetLastConnectionState(id, type, false);

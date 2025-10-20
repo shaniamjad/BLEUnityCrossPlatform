@@ -50,7 +50,7 @@ public class UI_BLEDeviceItem : MonoBehaviour, IBLEDeviceListener
             if (hasProfile)
                 TrustedDeviceStore.AddOrUpdate(device.id, device.type);
 
-            BLEManager.Instance.Connect(device.id, device.type);
+            device.Connect();
         });
 
         disconnectButton.onClick.AddListener(() =>

@@ -14,7 +14,7 @@ public class BLEManager : MonoBehaviour
     // All discovered or connected devices
     private readonly Dictionary<string, BleDevice> devices = new();
     public IReadOnlyDictionary<string, BleDevice> Devices => devices;
-    private ParserFactory parsersFactory = new ParserFactory(new BiopotGenericInfo { ChannelsNumber = 8, SamplesPerChannelNumber = 7 });
+    private ParserFactory parsersFactory = new ParserFactory();
 
 
     private const float InitialScanDurationSeconds = 15f;
@@ -329,8 +329,7 @@ public class BLEManager : MonoBehaviour
 
         if (device.isConnected || device.isAutoConnecting || device.autoConnectFailed)
             return;
-
-        Connect(device.id, device.type, initiatedByAuto: true);
+        device.Connect(initiatedByAuto: true);
     }
 
     public void ScheduleAutoConnectTimeout(string deviceId)
@@ -388,75 +387,6 @@ public class BLEManager : MonoBehaviour
             device.StartMeasurement();
         }
     }
-
-
-
-
-
-
-
-
-    // ----------------------------------------------------------------------
-    // --- PUBLIC BLE ACTIONS ----------------------------------------------
-    // ----------------------------------------------------------------------
-    public void Connect(string deviceId, DeviceType type, bool initiatedByAuto = false)
-    {
-        if (string.IsNullOrEmpty(deviceId))
-            return;
-
-        if (!devices.TryGetValue(deviceId, out var device))
-        {
-            device = new BleDevice
-            {
-                id = deviceId,
-                type = type,
-                name = deviceId
-            };
-            devices[deviceId] = device;
-        }
-
-        if (type != DeviceType.Unknown)
-            device.type = type;
-
-        device.isTrusted = TrustedDeviceStore.IsTrusted(device.id);
-
-        var profile = BleDeviceProfiles.TryGetProfile(device.type);
-        if (profile == null)
-        {
-            Debug.LogWarning($"[BLEManager] No device profile registered for {type}. Unable to connect to {deviceId}.");
-            device.isAutoConnecting = false;
-            device.connectionNote = "Profile unavailable";
-            NotifyDevicesUpdated();
-            return;
-        }
-
-        if (BLEPlugin.Instance == null)
-        {
-            device.connectionNote = "BLE plugin unavailable";
-            device.isAutoConnecting = false;
-            NotifyDevicesUpdated();
-            return;
-        }
-
-        device.isAutoConnecting = initiatedByAuto;
-
-        if (initiatedByAuto)
-        {
-            device.autoConnectFailed = false;
-            device.connectionNote = "Auto-connecting...";
-            ScheduleAutoConnectTimeout(deviceId);
-        }
-        else
-        {
-            device.autoConnectFailed = true;
-            CancelAutoConnectTimeout(deviceId);
-            device.connectionNote = "Connecting...";
-        }
-
-        BLEPlugin.Instance.Connect(deviceId, profile);
-        NotifyDevicesUpdated();
-    }
-
 
 
     public List<BleDevice> GetIMUDevices()

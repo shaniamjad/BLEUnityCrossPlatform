@@ -1,10 +1,8 @@
 public class ParserFactory
 {
-    private readonly BiopotGenericInfo biopotConfig;
 
-    public ParserFactory(BiopotGenericInfo biopotConfig)
+    public ParserFactory()
     {
-        this.biopotConfig = biopotConfig;
     }
 
     /// <summary>
@@ -18,7 +16,7 @@ public class ParserFactory
                 return new MovellaSignalParser();
 
             case DeviceType.BioPot:
-                return new BiopotSignalParser(biopotConfig);
+                return new BiopotSignalParser(new BiopotGenericInfo { ChannelsNumber = 8, SamplesPerChannelNumber = 7 });
 
             case DeviceType.Unknown:
             default:
